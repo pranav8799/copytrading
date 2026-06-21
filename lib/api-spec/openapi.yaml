@@ -1,0 +1,1371 @@
+openapi: 3.1.0
+info:
+  # Do not change the title, if the title changes, the import paths will be broken
+  title: Api
+  version: 0.1.0
+  description: Copy Trading Admin Panel API
+servers:
+  - url: /api
+    description: Base API path
+tags:
+  - name: health
+  - name: auth
+  - name: accounts
+  - name: trade
+  - name: positions
+  - name: orders
+  - name: pnl
+  - name: tpsl
+  - name: leverage
+  - name: margin
+  - name: balances
+  - name: market
+  - name: webhooks
+  - name: logs
+  - name: dashboard
+  - name: settings
+
+paths:
+  /healthz:
+    get:
+      operationId: healthCheck
+      tags: [health]
+      summary: Health check
+      responses:
+        "200":
+          description: Healthy
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthStatus"
+
+  /auth/login:
+    post:
+      operationId: login
+      tags: [auth]
+      summary: Admin login
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AdminCredentials"
+      responses:
+        "200":
+          description: JWT token
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AuthToken"
+        "401":
+          description: Invalid credentials
+
+  /accounts:
+    get:
+      operationId: listAccounts
+      tags: [accounts]
+      summary: List all accounts
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: List of accounts
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Account"
+    post:
+      operationId: createAccount
+      tags: [accounts]
+      summary: Add a new account
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AccountInput"
+      responses:
+        "201":
+          description: Created account
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Account"
+
+  /accounts/{id}:
+    put:
+      operationId: updateAccount
+      tags: [accounts]
+      summary: Update account
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AccountUpdate"
+      responses:
+        "200":
+          description: Updated account
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Account"
+    delete:
+      operationId: deleteAccount
+      tags: [accounts]
+      summary: Delete account
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "204":
+          description: Deleted
+
+  /accounts/{id}/verify:
+    post:
+      operationId: verifyAccount
+      tags: [accounts]
+      summary: Verify account API keys
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Verification result
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AccountVerifyResult"
+
+  /trade/execute:
+    post:
+      operationId: executeTrade
+      tags: [trade]
+      summary: Execute trade across accounts
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/TradeExecution"
+      responses:
+        "200":
+          description: Per-account results
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/AccountResult"
+
+  /trade/order:
+    delete:
+      operationId: cancelOrder
+      tags: [trade]
+      summary: Cancel a specific order across accounts
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CancelOrderInput"
+      responses:
+        "200":
+          description: Cancel results
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/AccountResult"
+
+  /trade/cancel-all:
+    post:
+      operationId: cancelAllOrders
+      tags: [trade]
+      summary: Cancel all open orders
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CancelAllInput"
+      responses:
+        "200":
+          description: Cancel all results
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/AccountResult"
+
+  /positions:
+    get:
+      operationId: getPositions
+      tags: [positions]
+      summary: Get open positions across all accounts
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: symbol
+          in: query
+          schema:
+            type: string
+        - name: accountIds
+          in: query
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Positions
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/PositionWithAccount"
+
+  /orders/open:
+    post:
+      operationId: getOpenOrders
+      tags: [orders]
+      summary: Get open orders across accounts
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/OpenOrdersQuery"
+      responses:
+        "200":
+          description: Open orders
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/OrderWithAccount"
+
+  /orders/closed:
+    post:
+      operationId: getClosedOrders
+      tags: [orders]
+      summary: Get closed orders
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ClosedOrdersQuery"
+      responses:
+        "200":
+          description: Closed orders
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/OrderWithAccount"
+
+  /pnl:
+    get:
+      operationId: getPnl
+      tags: [pnl]
+      summary: Get P&L summary across accounts
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: from_time
+          in: query
+          schema:
+            type: ["integer", "null"]
+        - name: to_time
+          in: query
+          schema:
+            type: ["integer", "null"]
+        - name: accountIds
+          in: query
+          schema:
+            type: string
+      responses:
+        "200":
+          description: P&L data
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/PnlSummary"
+
+  /tpsl/set:
+    post:
+      operationId: setTpsl
+      tags: [tpsl]
+      summary: Set TP/SL for accounts
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/TpslInput"
+      responses:
+        "200":
+          description: Results
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/AccountResult"
+
+  /tpsl/{accountId}/{orderId}:
+    delete:
+      operationId: cancelTpsl
+      tags: [tpsl]
+      summary: Cancel a TP/SL order
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: accountId
+          in: path
+          required: true
+          schema:
+            type: integer
+        - name: orderId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Cancelled
+
+  /leverage:
+    get:
+      operationId: getLeverage
+      tags: [leverage]
+      summary: Get leverage for a symbol/account
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: symbol
+          in: query
+          required: true
+          schema:
+            type: string
+        - name: accountId
+          in: query
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Leverage info
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LeverageInfo"
+    post:
+      operationId: setLeverage
+      tags: [leverage]
+      summary: Set leverage for accounts
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/LeverageInput"
+      responses:
+        "200":
+          description: Results
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/AccountResult"
+
+  /margin/add:
+    post:
+      operationId: addMargin
+      tags: [margin]
+      summary: Add margin to a position
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/MarginInput"
+      responses:
+        "200":
+          description: Updated position
+
+  /balances:
+    get:
+      operationId: getBalances
+      tags: [balances]
+      summary: Get wallet balances for all active accounts
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Account balances
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/AccountBalance"
+
+  /market/ticker:
+    get:
+      operationId: getTicker
+      tags: [market]
+      summary: Get ticker for a symbol
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: symbol
+          in: query
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Ticker data
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TickerData"
+
+  /market/orderbook:
+    get:
+      operationId: getOrderbook
+      tags: [market]
+      summary: Get order book for a symbol
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: symbol
+          in: query
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Orderbook
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OrderbookData"
+
+  /market/instruments:
+    get:
+      operationId: getInstruments
+      tags: [market]
+      summary: Get all tradeable instruments
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Instruments map
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/InstrumentsData"
+
+  /webhooks:
+    get:
+      operationId: listWebhooks
+      tags: [webhooks]
+      summary: List all webhooks
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Webhooks
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Webhook"
+    post:
+      operationId: createWebhook
+      tags: [webhooks]
+      summary: Create a webhook
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/WebhookInput"
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Webhook"
+
+  /webhooks/{id}:
+    put:
+      operationId: updateWebhook
+      tags: [webhooks]
+      summary: Update a webhook
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/WebhookUpdate"
+      responses:
+        "200":
+          description: Updated webhook
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Webhook"
+    delete:
+      operationId: deleteWebhook
+      tags: [webhooks]
+      summary: Delete a webhook
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "204":
+          description: Deleted
+
+  /webhooks/{token}/test:
+    post:
+      operationId: testWebhook
+      tags: [webhooks]
+      summary: Test a webhook (dry run)
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: token
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Test result
+
+  /logs/trades:
+    get:
+      operationId: getTradeLogs
+      tags: [logs]
+      summary: Get trade logs
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: page
+          in: query
+          schema:
+            type: integer
+        - name: symbol
+          in: query
+          schema:
+            type: string
+        - name: accountId
+          in: query
+          schema:
+            type: ["integer", "null"]
+        - name: status
+          in: query
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Trade logs
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TradeLogsPage"
+
+  /logs/webhooks:
+    get:
+      operationId: getWebhookLogs
+      tags: [logs]
+      summary: Get webhook execution logs
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: page
+          in: query
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Webhook logs
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WebhookLogsPage"
+
+  /logs/system:
+    get:
+      operationId: getSystemLogs
+      tags: [logs]
+      summary: Get system logs
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: page
+          in: query
+          schema:
+            type: integer
+        - name: level
+          in: query
+          schema:
+            type: string
+      responses:
+        "200":
+          description: System logs
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SystemLogsPage"
+
+  /dashboard:
+    get:
+      operationId: getDashboard
+      tags: [dashboard]
+      summary: Get dashboard stats
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Dashboard stats
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DashboardStats"
+
+  /settings:
+    get:
+      operationId: getSettings
+      tags: [settings]
+      summary: Get app settings
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Settings
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Settings"
+    put:
+      operationId: updateSettings
+      tags: [settings]
+      summary: Update settings
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SettingsUpdate"
+      responses:
+        "200":
+          description: Updated settings
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Settings"
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  schemas:
+    HealthStatus:
+      type: object
+      required: [status]
+      properties:
+        status:
+          type: string
+
+    AdminCredentials:
+      type: object
+      required: [password]
+      properties:
+        password:
+          type: string
+
+    AuthToken:
+      type: object
+      required: [token]
+      properties:
+        token:
+          type: string
+
+    Account:
+      type: object
+      required: [id, name, mobileNumber, apiKeyMasked, isActive, createdAt]
+      properties:
+        id:
+          type: integer
+        name:
+          type: string
+        mobileNumber:
+          type: string
+        apiKeyMasked:
+          type: string
+        isActive:
+          type: boolean
+        lastBalance:
+          type: ["string", "null"]
+        currentBalance:
+          type: ["string", "null"]
+        balanceUpdatedAt:
+          type: ["string", "null"]
+        createdAt:
+          type: string
+
+    AccountInput:
+      type: object
+      required: [name, mobileNumber, apiKey, secretKey]
+      properties:
+        name:
+          type: string
+        mobileNumber:
+          type: string
+        apiKey:
+          type: string
+        secretKey:
+          type: string
+
+    AccountUpdate:
+      type: object
+      properties:
+        name:
+          type: string
+        mobileNumber:
+          type: ["string", "null"]
+        apiKey:
+          type: ["string", "null"]
+        secretKey:
+          type: ["string", "null"]
+        isActive:
+          type: ["boolean", "null"]
+
+    AccountVerifyResult:
+      type: object
+      required: [success]
+      properties:
+        success:
+          type: boolean
+        balance:
+          type: ["string", "null"]
+        error:
+          type: ["string", "null"]
+
+    OrderPayload:
+      type: object
+      required: [symbol, side, orderType, quantity]
+      properties:
+        symbol:
+          type: string
+        side:
+          type: string
+          enum: [BUY, SELL]
+        orderType:
+          type: string
+          enum: [MARKET, LIMIT, STOP_MARKET, TAKE_PROFIT_MARKET]
+        quantity:
+          type: number
+        price:
+          type: ["number", "null"]
+        triggerPrice:
+          type: ["number", "null"]
+        reduceOnly:
+          type: ["boolean", "null"]
+        timeInForce:
+          type: ["string", "null"]
+
+    TradeExecution:
+      type: object
+      required: [accountIds, order]
+      properties:
+        accountIds:
+          type: array
+          items:
+            type: integer
+        order:
+          $ref: "#/components/schemas/OrderPayload"
+
+    AccountResult:
+      type: object
+      required: [accountId, accountName, success]
+      properties:
+        accountId:
+          type: integer
+        accountName:
+          type: string
+        success:
+          type: boolean
+        orderId:
+          type: ["string", "null"]
+        status:
+          type: ["string", "null"]
+        error:
+          type: ["string", "null"]
+
+    CancelOrderInput:
+      type: object
+      required: [accountIds, orderId]
+      properties:
+        accountIds:
+          type: array
+          items:
+            type: integer
+        orderId:
+          type: string
+
+    CancelAllInput:
+      type: object
+      required: [accountIds]
+      properties:
+        accountIds:
+          type: array
+          items:
+            type: integer
+        symbol:
+          type: ["string", "null"]
+
+    PositionWithAccount:
+      type: object
+      required: [accountId, accountName, positionId, symbol, positionSide, leverage, positionSize, positionValue, positionMargin, avgEntryPrice, markPrice, unrealisedPnl, liquidationPrice, marginType, status]
+      properties:
+        accountId:
+          type: integer
+        accountName:
+          type: string
+        positionId:
+          type: string
+        symbol:
+          type: string
+        positionSide:
+          type: string
+        leverage:
+          type: string
+        positionSize:
+          type: string
+        positionValue:
+          type: string
+        positionMargin:
+          type: string
+        maintMargin:
+          type: string
+        avgEntryPrice:
+          type: string
+        markPrice:
+          type: ["string", "number"]
+        lastPrice:
+          type: ["string", "number"]
+        unrealisedPnl:
+          type: string
+        liquidationPrice:
+          type: string
+        marginType:
+          type: string
+        status:
+          type: string
+
+    OpenOrdersQuery:
+      type: object
+      properties:
+        symbol:
+          type: ["string", "null"]
+        accountIds:
+          type: array
+          items:
+            type: integer
+
+    ClosedOrdersQuery:
+      type: object
+      properties:
+        symbol:
+          type: ["string", "null"]
+        status:
+          type: ["string", "null"]
+        accountIds:
+          type: array
+          items:
+            type: integer
+        fromTime:
+          type: ["integer", "null"]
+        toTime:
+          type: ["integer", "null"]
+
+    OrderWithAccount:
+      type: object
+      required: [accountId, accountName, orderId, symbol, side, orderType, quantity, status]
+      properties:
+        accountId:
+          type: integer
+        accountName:
+          type: string
+        orderId:
+          type: string
+        symbol:
+          type: string
+        side:
+          type: string
+        orderType:
+          type: string
+        quantity:
+          type: string
+        execQuantity:
+          type: string
+        price:
+          type: string
+        avgExecutionPrice:
+          type: ["string", "null"]
+        executionFee:
+          type: ["string", "null"]
+        realisedPnl:
+          type: ["string", "null"]
+        reduceOnly:
+          type: boolean
+        status:
+          type: string
+        createdAt:
+          type: ["integer", "null"]
+
+    PnlSummary:
+      type: object
+      required: [accountId, accountName, realisedPnl, fees, netPnl, tradeCount]
+      properties:
+        accountId:
+          type: integer
+        accountName:
+          type: string
+        realisedPnl:
+          type: number
+        fees:
+          type: number
+        netPnl:
+          type: number
+        tradeCount:
+          type: integer
+
+    TpslInput:
+      type: object
+      required: [accountIds, symbol]
+      properties:
+        accountIds:
+          type: array
+          items:
+            type: integer
+        symbol:
+          type: string
+        tpPrice:
+          type: ["number", "null"]
+        slPrice:
+          type: ["number", "null"]
+
+    LeverageInfo:
+      type: object
+      required: [symbol, leverage]
+      properties:
+        symbol:
+          type: string
+        leverage:
+          type: string
+
+    LeverageInput:
+      type: object
+      required: [accountIds, symbol, leverage]
+      properties:
+        accountIds:
+          type: array
+          items:
+            type: integer
+        symbol:
+          type: string
+        leverage:
+          type: integer
+
+    MarginInput:
+      type: object
+      required: [accountId, symbol, margin]
+      properties:
+        accountId:
+          type: integer
+        symbol:
+          type: string
+        margin:
+          type: number
+
+    AccountBalance:
+      type: object
+      required: [accountId, accountName]
+      properties:
+        accountId:
+          type: integer
+        accountName:
+          type: string
+        availableBalance:
+          type: ["string", "null"]
+        totalBalance:
+          type: ["string", "null"]
+        error:
+          type: ["string", "null"]
+
+    TickerData:
+      type: object
+      required: [symbol]
+      properties:
+        symbol:
+          type: string
+        lastPrice:
+          type: string
+        markPrice:
+          type: ["number", "null"]
+        indexPrice:
+          type: ["number", "null"]
+        fundingRate:
+          type: ["number", "null"]
+        bestBidPrice:
+          type: string
+        bestAskPrice:
+          type: string
+        high24h:
+          type: string
+        low24h:
+          type: string
+        priceChangePct24h:
+          type: string
+
+    OrderbookData:
+      type: object
+      required: [symbol, bids, asks]
+      properties:
+        symbol:
+          type: string
+        bids:
+          type: array
+          items:
+            type: array
+            items:
+              type: string
+        asks:
+          type: array
+          items:
+            type: array
+            items:
+              type: string
+        timestamp:
+          type: ["integer", "null"]
+
+    InstrumentsData:
+      type: object
+      properties:
+        instruments:
+          type: object
+
+    Webhook:
+      type: object
+      required: [id, name, token, isActive, createdAt]
+      properties:
+        id:
+          type: integer
+        name:
+          type: string
+        token:
+          type: string
+        targetAccounts:
+          type: array
+          items:
+            type: integer
+        defaultSymbol:
+          type: ["string", "null"]
+        defaultLeverage:
+          type: ["integer", "null"]
+        isActive:
+          type: boolean
+        lastTriggered:
+          type: ["string", "null"]
+        createdAt:
+          type: string
+
+    WebhookInput:
+      type: object
+      required: [name, targetAccounts]
+      properties:
+        name:
+          type: string
+        targetAccounts:
+          type: array
+          items:
+            type: integer
+        defaultSymbol:
+          type: ["string", "null"]
+        defaultLeverage:
+          type: ["integer", "null"]
+        isActive:
+          type: boolean
+
+    WebhookUpdate:
+      type: object
+      properties:
+        name:
+          type: ["string", "null"]
+        targetAccounts:
+          type: array
+          items:
+            type: integer
+        defaultSymbol:
+          type: ["string", "null"]
+        defaultLeverage:
+          type: ["integer", "null"]
+        isActive:
+          type: ["boolean", "null"]
+
+    TradeLog:
+      type: object
+      required: [id, accountId, accountName, symbol, side, orderType, status, firedVia, createdAt]
+      properties:
+        id:
+          type: integer
+        accountId:
+          type: integer
+        accountName:
+          type: string
+        orderId:
+          type: ["string", "null"]
+        symbol:
+          type: string
+        side:
+          type: string
+        orderType:
+          type: string
+        quantity:
+          type: ["string", "null"]
+        price:
+          type: ["string", "null"]
+        status:
+          type: string
+        errorMessage:
+          type: ["string", "null"]
+        firedVia:
+          type: string
+        createdAt:
+          type: string
+
+    TradeLogsPage:
+      type: object
+      required: [data, total, page]
+      properties:
+        data:
+          type: array
+          items:
+            $ref: "#/components/schemas/TradeLog"
+        total:
+          type: integer
+        page:
+          type: integer
+
+    WebhookLog:
+      type: object
+      required: [id, webhookId, webhookName, accountsFired, successCount, failCount, createdAt]
+      properties:
+        id:
+          type: integer
+        webhookId:
+          type: integer
+        webhookName:
+          type: string
+        payload:
+          type: object
+        accountsFired:
+          type: integer
+        successCount:
+          type: integer
+        failCount:
+          type: integer
+        createdAt:
+          type: string
+
+    WebhookLogsPage:
+      type: object
+      required: [data, total, page]
+      properties:
+        data:
+          type: array
+          items:
+            $ref: "#/components/schemas/WebhookLog"
+        total:
+          type: integer
+        page:
+          type: integer
+
+    SystemLog:
+      type: object
+      required: [id, level, message, createdAt]
+      properties:
+        id:
+          type: integer
+        level:
+          type: string
+        message:
+          type: string
+        context:
+          type: object
+        createdAt:
+          type: string
+
+    SystemLogsPage:
+      type: object
+      required: [data, total, page]
+      properties:
+        data:
+          type: array
+          items:
+            $ref: "#/components/schemas/SystemLog"
+        total:
+          type: integer
+        page:
+          type: integer
+
+    DashboardStats:
+      type: object
+      required: [totalAccounts, activeAccounts, totalPositions, totalUnrealisedPnl, recentExecutions, accountSummaries]
+      properties:
+        totalAccounts:
+          type: integer
+        activeAccounts:
+          type: integer
+        totalPositions:
+          type: integer
+        totalUnrealisedPnl:
+          type: number
+        recentExecutions:
+          type: array
+          items:
+            $ref: "#/components/schemas/TradeLog"
+        accountSummaries:
+          type: array
+          items:
+            $ref: "#/components/schemas/AccountSummary"
+
+    AccountSummary:
+      type: object
+      required: [accountId, accountName, isActive]
+      properties:
+        accountId:
+          type: integer
+        accountName:
+          type: string
+        isActive:
+          type: boolean
+        availableBalance:
+          type: ["string", "null"]
+        openPositions:
+          type: integer
+        unrealisedPnl:
+          type: ["number", "null"]
+        lastTrade:
+          type: ["string", "null"]
+
+    SelectedAccount:
+      type: object
+      required: [accountId, multiplier]
+      properties:
+        accountId:
+          type: integer
+        multiplier:
+          type: number
+
+    Settings:
+      type: object
+      required: [defaultOrderType, webhooksEnabled]
+      properties:
+        defaultLeverage:
+          type: integer
+        defaultOrderType:
+          type: string
+        webhooksEnabled:
+          type: boolean
+        selectedAccounts:
+          type: array
+          items:
+            $ref: "#/components/schemas/SelectedAccount"
+
+    SettingsUpdate:
+      type: object
+      properties:
+        defaultLeverage:
+          type: ["integer", "null"]
+        defaultOrderType:
+          type: ["string", "null"]
+        webhooksEnabled:
+          type: ["boolean", "null"]
+        selectedAccounts:
+          type: array
+          items:
+            $ref: "#/components/schemas/SelectedAccount"

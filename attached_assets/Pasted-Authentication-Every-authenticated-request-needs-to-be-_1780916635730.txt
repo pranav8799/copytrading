@@ -1,0 +1,66 @@
+Authentication
+Every authenticated request needs to be signed so we know it came from you and wasn't tampered with in transit. CoinSwitch uses Ed25519 signatures — a fast, modern public-key signing algorithm.
+
+This page describes the exact bytes you sign and the headers you send. You don't have to implement any of this by hand — just copy the Reference Client into your project. The rest of this page is for understanding what it does, or for porting to a language we don't have a snippet for.
+
+Required headers
+Every authenticated request includes the following headers.
+
+Header	Value
+Content-Type	application/json
+X-AUTH-APIKEY	Your API key (Ed25519 public key, hex).
+X-AUTH-SIGNATURE	Ed25519 signature of the request, hex-encoded. See below.
+X-AUTH-EPOCH	Current Unix time in milliseconds. Included in the signed message.
+For HFT, X-AUTH-EPOCH is mandatory — requests without it are rejected with 400. For Spot and Futures it is strongly recommended; you should always send it.
+
+X-AUTH-EPOCH is a fresh timestamp that gets baked into the signature. It prevents an attacker from intercepting your request and replaying it later — the server checks the epoch is within a few seconds of "now" before honouring it.
+
+Signed message format
+The signature is computed over this byte string, UTF-8 encoded:
+
+signed_message = METHOD + path_with_query + epoch
+
+Where:
+
+METHOD — HTTP method, uppercase: "GET", "POST", "DELETE", "PUT".
+path_with_query — the request path including any query string, URL-decoded (e.g. + decoded back to space, %2C decoded to ,). Scheme and host are not included.
+epoch — the value of the X-AUTH-EPOCH header (a decimal string of milliseconds since the Unix epoch). The same value must be sent in the header and used in the signed message.
+The signature is the Ed25519 signature of signed_message using your private (secret) key, hex-encoded.
+
+Examples
+For a GET /trade/api/v2/time at epoch 1719905777483:
+
+signed_message = "GET/trade/api/v2/time1719905777483"
+
+For a POST /trade/api/v2/order at epoch 1719905777483 with body {"side":"buy","quantity":0.001}:
+
+signed_message = "POST/trade/api/v2/order1719905777483"
+
+Notice the body is not part of the signed message when an epoch is sent. Use HTTPS (we only serve over HTTPS) and treat your secret key as confidential.
+
+For a GET /trade/api/v2/orders?open=true&exchanges=coinswitchx,c2c1 at epoch 1719905777483:
+
+signed_message = "GET/trade/api/v2/orders?open=true&exchanges=coinswitchx,c2c11719905777483"
+
+The query string is in decoded form — that is, commas and slashes appear literally, not as %2C or %2F. The Reference Client handles decoding for you.
+
+Drift window
+The epoch you send should be within ±5,000 ms of server time. Requests with drift greater than 60,000 ms are rejected.
+
+If your local clock is unreliable, fetch the server's clock first:
+
+GET /trade/api/v2/time
+
+This is the one signed-API endpoint that does not require authentication. Use the returned serverTime to seed your epoch.
+
+Algorithm specifics
+Curve: Ed25519
+Encoding: keys and signatures are hex (lowercase or uppercase, both accepted).
+Key derivation: your API key is the Ed25519 public key derived from your secret key. CoinSwitch generates the pair when you create credentials in your Profile.
+What can go wrong
+HTTP	Cause	Fix
+401 Invalid Access	API key, secret, or signature is wrong; or the epoch is outside the drift window.	Verify your key/secret pair; verify your local clock is correct.
+400 (HFT only)	X-AUTH-EPOCH header is missing.	Always send the epoch on HFT calls.
+429	Too many requests.	Back off; see the rate-limit on the relevant endpoint.
+Drop-in helper
+You don't need to implement any of the above by hand. The Reference Client contains a single Python function and a single Java class that do all of this — just copy them into your project, set API_KEY and SECRET_KEY, and call sign_request(...) / client.send(...).

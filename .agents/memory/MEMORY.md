@@ -1,0 +1,2 @@
+- [Design subagent import bug](design-subagent-import-bug.md) — design subagent consistently uses internal package paths that aren't exported; fix to main package index after every design subagent run.
+- [CoinSwitch API signing](coinswitch-signing.md) — HMAC-SHA256 over method+path+epoch, exchange ID always EXCHANGE_2, 20 req/min rate limit → batch 18 accounts with 3.1s delay.

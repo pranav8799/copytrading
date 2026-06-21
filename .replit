@@ -1,0 +1,40 @@
+modules = ["nodejs-24"]
+
+[deployment]
+router = "application"
+deploymentTarget = "autoscale"
+
+[deployment.postBuild]
+args = ["pnpm", "store", "prune"]
+env = { "CI" = "true" }
+
+[workflows]
+runButton = "Project"
+
+[agent]
+stack = "PNPM_WORKSPACE"
+expertMode = true
+
+[postMerge]
+path = "scripts/post-merge.sh"
+timeoutMs = 20000
+
+[[ports]]
+localPort = 8080
+externalPort = 80
+
+[[ports]]
+localPort = 8081
+externalPort = 8081
+
+[[ports]]
+localPort = 18990
+externalPort = 3000
+
+[userenv]
+
+[userenv.shared]
+JWT_SECRET = "ab64114cf54068d15ae153beb5a2c12cfaef6ef18fc502edef13f2bdcd09e9b66e66d7ed08be10aede11d03de6142e6d"
+ENCRYPTION_KEY = "eeca5e76230ff92bdaba83f90b1979ce8777c82e4edb198473a86966ece9bcf0"
+COINSWITCH_BASE_URL = "https://coinswitch.co"
+ADMIN_PASSWORD = "admin123"

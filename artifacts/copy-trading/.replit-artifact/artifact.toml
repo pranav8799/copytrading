@@ -1,0 +1,31 @@
+kind = "web"
+previewPath = "/"
+title = "Copy Trading Panel"
+version = "1.0.0"
+id = "artifacts/copy-trading"
+router = "path"
+
+[[integratedSkills]]
+name = "react-vite"
+version = "1.0.0"
+
+[[services]]
+name = "web"
+paths = [ "/" ]
+localPort = 18990
+
+[services.development]
+run = "pnpm --filter @workspace/copy-trading run dev"
+
+[services.production]
+build = [ "pnpm", "--filter", "@workspace/copy-trading", "run", "build" ]
+publicDir = "artifacts/copy-trading/dist/public"
+serve = "static"
+
+[[services.production.rewrites]]
+from = "/*"
+to = "/index.html"
+
+[services.env]
+PORT = "18990"
+BASE_PATH = "/"

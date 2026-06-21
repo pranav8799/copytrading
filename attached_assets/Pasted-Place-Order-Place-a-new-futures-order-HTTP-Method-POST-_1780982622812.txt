@@ -1,0 +1,110 @@
+Place Order
+Place a new futures order.
+
+HTTP
+Method	POST
+Endpoint	/trade/api/v2/futures/order
+Rate limit	20 requests per 60 seconds
+Request Parameters
+Parameter	Type	Mandatory	Description
+exchange	string	Yes	EXCHANGE_2. See Exchange Identifiers.
+symbol	string	Yes	Concatenated BASEUSDT, e.g. BTCUSDT, DOGEUSDT. Quote is always USDT.
+side	string	Yes	BUY or SELL (case-insensitive).
+order_type	string	Yes	MARKET, LIMIT, TAKE_PROFIT_MARKET, or STOP_MARKET.
+price	number	Conditional	Limit price. Mandatory for LIMIT; ignored for the others.
+quantity	number	Yes	Base-asset quantity. Send 0 for TAKE_PROFIT_MARKET and STOP_MARKET (these apply to the full position).
+trigger_price	number	Conditional	Trigger price for TAKE_PROFIT_MARKET / STOP_MARKET.
+reduce_only	boolean	Conditional	Mandatory true for TAKE_PROFIT_MARKET / STOP_MARKET. Optional for limit orders — true ensures the order will only reduce the existing position, never open the opposite side.
+time_in_force	string	No	GTC (default), IOC, or FOK.
+client_order_id	string	No	Optional client-supplied UUID echoed back in order responses.
+TP/SL orders (TAKE_PROFIT_MARKET / STOP_MARKET)
+These set position-level take-profit / stop-loss. They apply to the whole open position on the symbol, not a specific quantity. The pattern is:
+
+quantity = 0
+trigger_price = the price at which to trigger the close
+reduce_only = true
+# Set a stop-loss at 0.30 USDT on a long DOGEUSDT position
+body = {
+    "exchange": "EXCHANGE_2",
+    "symbol": "dogeusdt",
+    "side": "SELL",
+    "order_type": "STOP_MARKET",
+    "quantity": 0,
+    "trigger_price": 0.30,
+    "reduce_only": True,
+}
+
+Example
+Python
+Java
+Go
+Node.js
+const {signRequest, BASE_URL} = require('./reference-client');
+
+const body = {
+    "symbol": "dogeusdt",
+    "exchange": "EXCHANGE_2",
+    "side": "BUY",
+    "order_type": "LIMIT",
+    "price": 0.28,
+    "quantity": 22,
+};
+
+const {headers, path} = signRequest('POST', '/trade/api/v2/futures/order');
+const r = await fetch(BASE_URL + path, {
+  method: 'POST',
+  headers,
+  body: JSON.stringify(body),
+});
+console.log(await r.json());
+
+Response
+{
+  "data": {
+    "order_id": "01936474-a76f-767e-a056-ca1d41915778",
+    "exchange": "EXCHANGE_2",
+    "symbol": "DOGEUSDT",
+    "side": "BUY",
+    "status": "RAISED",
+    "order_type": "LIMIT",
+    "quantity": "22",
+    "exec_quantity": "0",
+    "price": "0.28",
+    "avg_execution_price": "0",
+    "execution_fee": "0.0041",
+    "realised_pnl": "0",
+    "reduce_only": false,
+    "trigger_price": "0",
+    "created_at": 1732557186934,
+    "updated_at": 1732557186934
+  }
+}
+
+If status is RAISED, poll Get Order Status until you see a terminal status. See Order Lifecycle.
+
+Futures PARTIALLY_EXECUTED is terminal
+Unlike Spot, in Futures PARTIALLY_EXECUTED is a terminal status — the unfilled remainder of the order is no longer working and won't fill further. If you need the full quantity filled, place a new order for the remaining size.
+
+Response Parameters
+Field	Type	Description
+order_id	string	CoinSwitch order ID (UUID).
+exchange	string	Exchange identifier echoed back.
+symbol	string	Symbol echoed back, uppercase.
+side	string	BUY or SELL.
+status	string	One of the Order Lifecycle values.
+order_type	string	Echoed back.
+quantity	string	Original quantity (decimal string).
+exec_quantity	string	Filled quantity so far.
+price	string	Limit price for LIMIT orders; "0" for market orders.
+avg_execution_price	string	Average fill price. "0" until any fill.
+execution_fee	string	Total fee charged so far (USDT).
+realised_pnl	string	Realised P&L (USDT).
+reduce_only	boolean	Echoed back.
+trigger_price	string	Trigger price for TAKE_PROFIT_MARKET / STOP_MARKET. "0" otherwise.
+created_at	integer	Order creation time (Unix milliseconds).
+updated_at	integer	Last update time (Unix milliseconds).
+Errors
+HTTP	Cause
+400	Invalid quantity, price below tick, or insufficient available balance.
+401	Invalid signature. See Authentication.
+422	Validation failed on parameter types or missing required fields.

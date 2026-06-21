@@ -1,0 +1,1 @@
+ALTER TABLE `settings` ADD `selected_account_ids` json DEFAULT ('[]') NOT NULL;
