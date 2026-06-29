@@ -165,7 +165,7 @@ const calcMargin = (quantity: string | number, price: string | number, lev: numb
 };
 
 /* ── constants ── */
-const LEVERAGE_PRESETS = [1, 5, 10, 20, 50, 75, 100];
+const LEVERAGE_PRESETS = [5, 10, 20, 50];
 const ORDER_TYPES: { value: OrderPayloadOrderType; label: string }[] = [
   { value: "MARKET", label: "Market" },
   { value: "LIMIT", label: "Limit" },
@@ -675,15 +675,15 @@ function AutoPunchDrawer({
       <div
         className="relative flex rounded-2xl overflow-hidden shadow-2xl"
         style={{
-          width: "min(92vw, 820px)",
-          height: "min(90vh, 600px)",
+          width: "min(92vw, 700px)",     // ← was 820px
+    height: "min(90vh, 500px)",    // ← was 600px
           border: "1px solid hsl(258 82% 64% / 0.3)",
           background: "hsl(var(--card))",
         }}
       >
         {/* Left config */}
         <div
-          className="w-56 shrink-0 flex flex-col overflow-y-auto p-4 gap-3"
+          className="w-48 shrink-0 flex flex-col overflow-y-auto p-4 gap-3"
           style={{ borderRight: "1px solid hsl(var(--border))" }}
         >
           <div className="flex items-center gap-2">
@@ -2025,21 +2025,22 @@ export function TradePage() {
       </div>
 
       {/* Auto-Punch Drawer */}
-      <AutoPunchDrawer
-        open={showAutoPunchDrawer}
-        onClose={() => setShowAutoPunchDrawer(false)}
-        side={side}
-        entryPrice={price}
-        quantity={quantity}
-        selectedAccounts={effectiveSelection}
-        activeAccounts={activeAccounts}
-        balances={balances as any}
-        onConfigSaved={(cfg) => {
-          setLocalAutoPunchConfig(cfg);
-          setAutoPunchEnabled(true);
-        }}
-        savedConfig={autoPunchConfig}
-      />
+      {/* Auto-Punch Drawer */}
+<AutoPunchDrawer
+  open={showAutoPunchDrawer}
+  onClose={() => setShowAutoPunchDrawer(false)}
+  side={side}
+  entryPrice={price}
+  quantity={quantity}
+  selectedAccounts={effectiveSelection}
+  activeAccounts={activeAccounts}
+  balances={balances as any}
+  onConfigSaved={(cfg) => {
+    setLocalAutoPunchConfig(cfg);
+    setAutoPunchEnabled(true);
+  }}
+  savedConfig={autoPunchConfig}
+/>
 
       <AddAccountsModal open={showAddModal} onClose={() => setShowAddModal(false)} unselectedAccounts={unselectedAccounts} getBalance={getBalance} onSave={handleModalSave} />
       <ConfirmDialog state={confirmState} onConfirm={handleConfirm} onCancel={() => setConfirmState(null)} />
