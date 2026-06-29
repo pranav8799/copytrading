@@ -4,3 +4,5 @@ export * from "./webhooks";
 export * from "./webhook_logs";
 export * from "./system_logs";
 export * from "./settings";
+export * from "./otps";
+export * from "./admins";

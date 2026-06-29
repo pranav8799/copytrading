@@ -20,6 +20,8 @@ import NotFound from "@/pages/not-found";
 import { Layout } from "@/components/layout";
 import { LoginPage } from "@/pages/login";
 import { SelectAccountsPage } from "./pages/select-accounts";
+// import { AutoLimitPage } from "./pages/auto-limit-page";
+// import { AutoTradePuncherPage } from "./pages/Autotradepuncher";
 
 const queryClient = new QueryClient();
 
@@ -64,6 +66,8 @@ function Router() {
             <Route path="/logs" component={LogsPage} />
             <Route path="/settings" component={SettingsPage} />
             <Route path="/select-accounts" component={SelectAccountsPage} />
+            {/* <Route path="/auto-limit" component={AutoTradePuncherPage} /> */}
+
             <Route component={NotFound} />
           </Switch>
         </Layout>

@@ -55,6 +55,9 @@ export async function placeOrderForAccount(
 
   if (payload.order_type === "LIMIT" && payload.price != null) {
     body.price = payload.price;
+
+
+    body.time_in_force = payload.time_in_force ?? "GTC";
   }
   if (isTpSl) {
     // trigger_price is mandatory for TP/SL orders
@@ -68,7 +71,9 @@ export async function placeOrderForAccount(
   } else {
     if (payload.reduce_only != null) body.reduce_only = payload.reduce_only;
   }
-  if (payload.time_in_force) body.time_in_force = payload.time_in_force;
+  if (payload.order_type !== "LIMIT" && payload.time_in_force) {
+    body.time_in_force = payload.time_in_force;
+  }
   if (payload.client_order_id) body.client_order_id = payload.client_order_id;
 
   const { headers, path } = signRequest(

@@ -16,10 +16,12 @@ export function Layout({ children }: { children: React.ReactNode }) {
 
   const navItems = [
     { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
+    // { href: "/auto-limit", label: "Automated Limits", icon: LayoutDashboard },
+
     { href: "/trade", label: "Trade Terminal", icon: Zap },
     { href: "/positions", label: "Positions", icon: Briefcase },
-    { href: "/orders", label: "Orders", icon: ListOrdered },
-    { href: "/pnl", label: "PnL Tracker", icon: LineChart },
+    // { href: "/orders", label: "Orders", icon: ListOrdered },
+    // { href: "/pnl", label: "PnL Tracker", icon: LineChart },
     { href: "/accounts", label: "Accounts", icon: Users },
     // { href: "/select-accounts", label: "Select Accounts", icon: Users },
     { href: "/webhooks", label: "Webhooks", icon: Webhook },

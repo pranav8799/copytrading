@@ -108,9 +108,20 @@ router.get("/logs/system", authMiddleware, async (req, res): Promise<void> => {
   const offset = (page - 1) * PAGE_SIZE;
 
   const conditions = [];
-  if (parsed.success && parsed.data.level) {
-    conditions.push(eq(systemLogsTable.level, parsed.data.level as "info" | "warn" | "error"));
-  }
+if (parsed.success && parsed.data.level) {
+  conditions.push(eq(systemLogsTable.level, parsed.data.level as "info" | "warn" | "error"));
+}
+if (req.query.search) {
+  conditions.push(like(systemLogsTable.message, `%${req.query.search}%`));
+}
+if (req.query.from) {
+  conditions.push(sql`${systemLogsTable.createdAt} >= ${new Date(req.query.from as string)}`);
+}
+if (req.query.to) {
+  const toDate = new Date(req.query.to as string);
+  toDate.setHours(23, 59, 59, 999);
+  conditions.push(sql`${systemLogsTable.createdAt} <= ${toDate}`);
+}
   const whereClause = conditions.length > 0 ? and(...conditions) : undefined;
 
   const [data, totalResult] = await Promise.all([

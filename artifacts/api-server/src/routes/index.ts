@@ -15,6 +15,7 @@ import logsRouter from "./logs";
 import dashboardRouter from "./dashboard";
 import settingsRouter from "./settings";
 import healthRouter from "./health";
+// import autoLimitRouter from "./auto-limit-route";
 
 const router: IRouter = Router();
 
@@ -34,5 +35,6 @@ router.use(webhooksRouter);
 router.use(logsRouter);
 router.use(dashboardRouter);
 router.use(settingsRouter);
+// router.use(autoLimitRouter);
 
 export default router;
