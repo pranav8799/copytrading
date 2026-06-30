@@ -119,6 +119,7 @@ type ConfirmState =
   | { type: "exit_selected"; count: number }
   | { type: "exit_all"; count: number }
   | { type: "cancel_all"; count: number }
+  | { type: "cancel_selected"; count: number }
   | { type: "cancel_order"; order: OpenOrder }
   | null;
 
@@ -1048,6 +1049,7 @@ function ConfirmDialog({ state, onConfirm, onCancel }: { state: ConfirmState; on
     exit_selected: { title: "Exit Selected", desc: state.type === "exit_selected" ? `Close ${state.count} position${state.count !== 1 ? "s" : ""}?` : "", label: `Exit ${state.type === "exit_selected" ? state.count : ""}` },
     exit_all: { title: "Exit All", desc: state.type === "exit_all" ? `Close all ${state.count} position${state.count !== 1 ? "s" : ""}?` : "", label: `Exit All ${state.type === "exit_all" ? state.count : ""}` },
     cancel_all: { title: "Cancel All Orders", desc: state.type === "cancel_all" ? `Cancel ${state.count} open order${state.count !== 1 ? "s" : ""}?` : "", label: `Cancel All` },
+    cancel_selected: { title: "Cancel Selected Orders", desc: state.type === "cancel_selected" ? `Cancel ${state.count} selected order${state.count !== 1 ? "s" : ""}?` : "", label: `Cancel Selected` },
     cancel_order: { title: "Cancel Order", desc: state.type === "cancel_order" ? `Cancel ${state.order.side} ${state.order.orderType} order on ${state.order.symbol} for ${state.order.accountName}?` : "", label: "Cancel Order" },
   }[state.type];
 
@@ -1104,6 +1106,7 @@ export function TradePage() {
   const [expandedTpsl, setExpandedTpsl] = useState<string | null>(null);
   const [posTpValues, setPosTpValues] = useState<Record<string, { tp: string; sl: string }>>({});
   const [selectedPositions, setSelectedPositions] = useState<Set<string>>(new Set());
+  const [selectedOrders, setSelectedOrders] = useState<Set<string>>(new Set());
   const [confirmState, setConfirmState] = useState<ConfirmState>(null);
 
   /* ── position filters ── */
@@ -1315,15 +1318,21 @@ export function TradePage() {
     });
   }, [cancelAllMut, effectiveAccountIds, activeAccounts, symbol, refetchOrders, toast]);
 
-  // const handleConfirm = useCallback(() => {
-  //   if (!confirmState) return;
-  //   setConfirmState(null);
-  //   if (confirmState.type === "exit_one") doExitPosition(confirmState.pos);
-  //   else if (confirmState.type === "exit_selected") doExitSelected();
-  //   else if (confirmState.type === "exit_all") doExitAll();
-  //   else if (confirmState.type === "cancel_all") doCancelAll();
-  //   else if (confirmState.type === "cancel_order") handleCancelOrder(confirmState.order);
-  // }, [confirmState, doExitPosition, doExitSelected, doExitAll, doCancelAll, handleCancelOrder]);
+  const doCancelSelected = useCallback(async () => {
+    const toCancel = (openOrders as OpenOrder[]).filter((o) => selectedOrders.has(`${o.accountId}-${o.orderId}`));
+    if (!toCancel.length) return;
+    const results = await Promise.allSettled(
+      toCancel.map((o) => cancelOrderMut.mutateAsync({ data: { accountIds: [o.accountId], orderId: o.orderId } }))
+    );
+    const ok = results.filter((r) => r.status === "fulfilled").length;
+    const failed = toCancel.length - ok;
+    toast({
+      title: failed === 0 ? `Cancelled ${ok} order${ok !== 1 ? "s" : ""} ✓` : `Cancelled ${ok}/${toCancel.length}`,
+      variant: failed === 0 ? "default" : "destructive",
+    });
+    setSelectedOrders(new Set());
+    void refetchOrders();
+  }, [openOrders, selectedOrders, cancelOrderMut, refetchOrders, toast]);
 
   const handleApplyTpsl = useCallback((pos: Position) => {
     const key = `${pos.accountId}-${pos.symbol}-${pos.positionSide}`;
@@ -1348,8 +1357,9 @@ export function TradePage() {
     else if (confirmState.type === "exit_selected") doExitSelected();
     else if (confirmState.type === "exit_all") doExitAll();
     else if (confirmState.type === "cancel_all") doCancelAll();
+    else if (confirmState.type === "cancel_selected") doCancelSelected();
     else if (confirmState.type === "cancel_order") handleCancelOrder(confirmState.order);
-  }, [confirmState, doExitPosition, doExitSelected, doExitAll, doCancelAll, handleCancelOrder]);
+  }, [confirmState, doExitPosition, doExitSelected, doExitAll, doCancelAll, doCancelSelected, handleCancelOrder]);
 
   const handleModalSave = (additions: SelectedAccount[]) => {
     if (!additions.length) return;
@@ -1429,6 +1439,21 @@ export function TradePage() {
   /* ── pagination ── */
   const posPagination = usePagination(filteredPositions, 25);
   const ordPagination = usePagination(filteredOrders, 25);
+
+  /* ── clear stale order selections when the underlying order list changes ── */
+  useEffect(() => {
+    setSelectedOrders((prev) => {
+      if (prev.size === 0) return prev;
+      const validKeys = new Set(ordersArr.map((o) => `${o.accountId}-${o.orderId}`));
+      let changed = false;
+      const next = new Set<string>();
+      prev.forEach((k) => {
+        if (validKeys.has(k)) next.add(k);
+        else changed = true;
+      });
+      return changed ? next : prev;
+    });
+  }, [ordersArr]);
 
   /* ─────────────────────────────────────────────────────────
      RENDER
@@ -1519,21 +1544,6 @@ export function TradePage() {
                 type="number" min="0" step="any" value={quantity} onChange={(e) => setQuantity(e.target.value)} placeholder="0.00" />
               <p className="text-[10px] text-muted-foreground mt-1">Actual = base × account multiplier.</p>
             </div>
-
-            {/* Price */}
-            {/* <div>
-              <label className="text-[10px] font-semibold uppercase tracking-widest text-muted-foreground mb-1 block">
-                Price (USDT)
-                {autoPunchEnabled && <span className="ml-1" style={{ color: "hsl(258 82% 60%)" }}>· auto-punch entry</span>}
-              </label>
-              <input className="w-full rounded-lg px-3 py-2.5 text-sm font-mono bg-input border border-border focus:outline-none focus:ring-1 focus:ring-ring transition-colors"
-                type="number" min="0" step="any" value={price} onChange={(e) => setPrice(e.target.value)} placeholder="0.00" />
-              {autoPunchEnabled && autoPunchConfig && (
-                <p className="text-[10px] mt-1" style={{ color: "hsl(258 82% 60%)" }}>
-                  ⚡ Will punch {autoPunchConfig.orderCount} limits from this price after trade.
-                </p>
-              )}
-            </div> */}
 
             {/* TP/SL */}
             <button onClick={() => setShowTpsl((v) => !v)} className="flex items-center justify-between w-full px-3 py-2 rounded-lg text-xs font-semibold transition-colors"
@@ -1719,11 +1729,6 @@ export function TradePage() {
                   : hasPending ? `${side} on ${pendingOnly.length} New Account${pendingOnly.length !== 1 ? "s" : ""}`
                   : `${side} on ${effectiveSelection.length || "—"} Account${effectiveSelection.length !== 1 ? "s" : ""}`}
               </button>
-              {/* <button onClick={handleSetLeverage} disabled={leverageMut.isPending || effectiveAccountIds.length === 0}
-                className="w-full py-2 rounded-xl font-semibold text-xs tracking-wide transition-all disabled:opacity-50"
-                style={{ border: "1px solid hsl(258 82% 64% / 0.35)", color: "hsl(var(--primary))", background: "hsl(258 82% 64% / 0.06)" }}>
-                {leverageMut.isPending ? "Setting…" : `Set ${leverage}× Leverage`}
-              </button> */}
             </div>
 
             {/* Multi-order */}
@@ -1819,10 +1824,19 @@ export function TradePage() {
                   </button>
                 </>
               ) : (
-                <button onClick={() => setConfirmState({ type: "cancel_all", count: ordersArr.length })} disabled={ordersArr.length === 0}
-                  className="px-3 py-1.5 rounded-lg text-xs font-bold disabled:opacity-40" style={{ background: "hsl(345 88% 58%)", color: "#fff" }}>
-                  Cancel All ({ordersArr.length})
-                </button>
+                <>
+                  {selectedOrders.size > 0 && (
+                    <button onClick={() => setConfirmState({ type: "cancel_selected", count: selectedOrders.size })}
+                      className="px-3 py-1.5 rounded-lg text-xs font-bold"
+                      style={{ background: "hsl(345 88% 58% / 0.15)", color: "hsl(345 88% 62%)", border: "1px solid hsl(345 88% 58% / 0.3)" }}>
+                      Cancel Selected ({selectedOrders.size})
+                    </button>
+                  )}
+                  <button onClick={() => setConfirmState({ type: "cancel_all", count: ordersArr.length })} disabled={ordersArr.length === 0}
+                    className="px-3 py-1.5 rounded-lg text-xs font-bold disabled:opacity-40" style={{ background: "hsl(345 88% 58%)", color: "#fff" }}>
+                    Cancel All ({ordersArr.length})
+                  </button>
+                </>
               )}
               <button onClick={() => rightTab === "positions" ? void refetchPositions() : void refetchOrders()}
                 className="p-1.5 rounded-lg text-muted-foreground hover:text-foreground transition-colors" style={{ border: "1px solid hsl(var(--border))" }}>
@@ -2025,6 +2039,15 @@ export function TradePage() {
               <table className="w-full text-xs border-collapse">
                 <thead>
                   <tr style={{ background: "hsl(var(--muted))", borderBottom: "1px solid hsl(var(--border))" }}>
+                    <th className="px-3 py-2 text-left font-semibold uppercase tracking-wider text-muted-foreground w-6">
+                      <Checkbox
+                        checked={selectedOrders.size === filteredOrders.length && filteredOrders.length > 0}
+                        onCheckedChange={(v) => {
+                          if (v) setSelectedOrders(new Set(filteredOrders.map((o) => `${o.accountId}-${o.orderId}`)));
+                          else setSelectedOrders(new Set());
+                        }}
+                      />
+                    </th>
                     {["Account", "Phone", "Symbol", "Side", "Type", "Qty", "Price", "Margin Req.", "Remaining Bal.", "Status", "Reduce Only", "Created", "Actions"].map((h) => (
                       <th key={h} className="px-3 py-2 text-left font-semibold uppercase tracking-wider text-muted-foreground">{h}</th>
                     ))}
@@ -2033,7 +2056,7 @@ export function TradePage() {
                 <tbody>
                   {filteredOrders.length === 0 ? (
                     <tr>
-                      <td colSpan={13} className="text-center py-16 text-muted-foreground">
+                      <td colSpan={14} className="text-center py-16 text-muted-foreground">
                         {ordersArr.length === 0 ? "No open orders" : (
                           <div className="flex flex-col items-center gap-2">
                             <Filter className="w-6 h-6 opacity-30" />
@@ -2046,11 +2069,18 @@ export function TradePage() {
                     </tr>
                   ) : (
                     ordPagination.paged.map((order, idx) => {
+                      const orderRowKey = `${order.accountId}-${order.orderId}`;
+                      const isOrderSelected = selectedOrders.has(orderRowKey);
                       const margin = calcMargin(order.quantity, order.price, leverage);
                       const rawBalance = getRawBalance(order.accountId);
                       const remaining = margin != null && rawBalance != null ? rawBalance - margin : null;
                       return (
-                        <tr key={`${order.accountId}-${order.orderId}`} style={{ borderBottom: "1px solid hsl(var(--border))", background: idx % 2 === 0 ? "transparent" : "hsl(var(--muted) / 0.3)" }}>
+                        <tr key={orderRowKey} style={{ borderBottom: "1px solid hsl(var(--border))", background: isOrderSelected ? "hsl(258 82% 64% / 0.06)" : idx % 2 === 0 ? "transparent" : "hsl(var(--muted) / 0.3)" }}>
+                          <td className="px-3 py-2.5">
+                            <Checkbox checked={isOrderSelected} onCheckedChange={(v) => {
+                              setSelectedOrders((prev) => { const next = new Set(prev); if (v) next.add(orderRowKey); else next.delete(orderRowKey); return next; });
+                            }} />
+                          </td>
                           <td className="px-3 py-2.5 font-medium max-w-[100px] truncate">{order.accountName}</td>
                           <td className="px-3 py-2.5 font-mono text-muted-foreground">{getMobileNumber(order.accountId)}</td>
                           <td className="px-3 py-2.5 font-bold font-mono">{order.symbol}</td>
@@ -2109,7 +2139,6 @@ export function TradePage() {
         </div>
       </div>
 
-      {/* Auto-Punch Drawer */}
       {/* Auto-Punch Drawer */}
 <AutoPunchDrawer
   open={showAutoPunchDrawer}
