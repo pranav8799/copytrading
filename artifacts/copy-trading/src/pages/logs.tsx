@@ -10,6 +10,21 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { TablePagination } from "@/components/TablePagination";
+import {
+  ScrollText,
+  Activity,
+  ListChecks,
+  Search,
+  X,
+  RefreshCw,
+  Info,
+  AlertTriangle,
+  AlertCircle,
+  ArrowUpRight,
+  ArrowDownRight,
+  Phone,
+  Filter,
+} from "lucide-react";
 
 const SYS_PAGE_SIZE = 20;
 const TRADE_PAGE_SIZE = 20;
@@ -41,16 +56,10 @@ type TradeLog = {
   errorMessage?: string | null;
 };
 
-const levelColors: Record<string, string> = {
-  info: "bg-blue-500/10 text-blue-400 border-blue-500/20",
-  warn: "bg-yellow-500/10 text-yellow-400 border-yellow-500/20",
-  error: "bg-red-500/10 text-red-400 border-red-500/20",
-};
-
-const levelDot: Record<string, string> = {
-  info: "bg-blue-400",
-  warn: "bg-yellow-400",
-  error: "bg-red-400",
+const levelConfig: Record<string, { badge: string; dot: string; icon: typeof Info; iconColor: string }> = {
+  info: { badge: "bg-blue-500/10 text-blue-400 border-blue-500/20", dot: "bg-blue-400", icon: Info, iconColor: "hsl(217 91% 60%)" },
+  warn: { badge: "bg-yellow-500/10 text-yellow-400 border-yellow-500/20", dot: "bg-yellow-400", icon: AlertTriangle, iconColor: "hsl(38 92% 50%)" },
+  error: { badge: "bg-red-500/10 text-red-400 border-red-500/20", dot: "bg-red-400", icon: AlertCircle, iconColor: "hsl(345 88% 58%)" },
 };
 
 function parseContext(ctx: SystemLog["context"]): Record<string, any> | null {
@@ -120,6 +129,35 @@ const calcNotional = (
   return q * p;
 };
 
+/* ── shared little components for a more polished look ── */
+function StatCard({ label, value, color, icon: Icon }: { label: string; value: number; color: string; icon: typeof Info }) {
+  return (
+    <Card className="border-border/60">
+      <CardContent className="p-4 flex items-center justify-between">
+        <div>
+          <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">{label}</p>
+          <p className="text-2xl font-bold mt-1" style={{ color }}>{value}</p>
+        </div>
+        <div
+          className="w-9 h-9 rounded-lg flex items-center justify-center shrink-0"
+          style={{ background: `${color}1f` }}
+        >
+          <Icon className="w-4 h-4" style={{ color }} />
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
+function FilterField({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <div className="space-y-1.5">
+      <Label className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">{label}</Label>
+      {children}
+    </div>
+  );
+}
+
 export function LogsPage() {
   /* ════════════════════════════════════════════════════════════════════
      ACTIVITY (SYSTEM) LOGS
@@ -162,6 +200,9 @@ export function LogsPage() {
     setSysPage(1);
   };
 
+  const sysActiveFilters =
+    (level !== "all" ? 1 : 0) + (from ? 1 : 0) + (to ? 1 : 0) + (search ? 1 : 0);
+
   const sysCounts = {
     total: sysLogs?.length ?? 0,
     info: sysLogs?.filter((l) => l.level === "info").length ?? 0,
@@ -183,6 +224,13 @@ export function LogsPage() {
   const { data: balances } = useGetBalances();
 
   const allTradeLogs = (tradeLogsResp?.data ?? []) as TradeLog[];
+
+  const getMobileNumber = (accountId: number | undefined, accountName?: string): string => {
+    const list = (accounts ?? []) as Array<{ id: number; name: string; mobileNumber?: string }>;
+    const byId = accountId != null ? list.find((a) => a.id === accountId) : undefined;
+    const byName = !byId && accountName ? list.find((a) => a.name === accountName) : undefined;
+    return (byId ?? byName)?.mobileNumber ?? "—";
+  };
 
   const [tlAccount, setTlAccount] = useState("all");
   const [tlSymbol, setTlSymbol] = useState("all");
@@ -228,12 +276,14 @@ export function LogsPage() {
       }
       if (tlSearch) {
         const q = tlSearch.toLowerCase();
-        const haystack = `${log.accountName} ${log.symbol} ${log.side} ${log.orderType} ${log.status} ${log.errorMessage ?? ""}`.toLowerCase();
+        const phone = getMobileNumber(log.accountId, log.accountName).toLowerCase();
+        const haystack = `${log.accountName} ${phone} ${log.symbol} ${log.side} ${log.orderType} ${log.status} ${log.errorMessage ?? ""}`.toLowerCase();
         if (!haystack.includes(q)) return false;
       }
       return true;
     });
-  }, [allTradeLogs, tlAccount, tlSymbol, tlSide, tlStatus, tlFrom, tlTo, tlSearch]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [allTradeLogs, tlAccount, tlSymbol, tlSide, tlStatus, tlFrom, tlTo, tlSearch, accounts]);
 
   const handleTlReset = () => {
     setTlAccount("all");
@@ -251,6 +301,15 @@ export function LogsPage() {
     setter(v);
     setTradePage(1);
   };
+
+  const tlActiveFilters =
+    (tlAccount !== "all" ? 1 : 0) +
+    (tlSymbol !== "all" ? 1 : 0) +
+    (tlSide !== "all" ? 1 : 0) +
+    (tlStatus !== "all" ? 1 : 0) +
+    (tlFrom ? 1 : 0) +
+    (tlTo ? 1 : 0) +
+    (tlSearch ? 1 : 0);
 
   const getRawBalance = (accountId: number | undefined): number | null => {
     if (accountId == null) return null;
@@ -283,18 +342,30 @@ export function LogsPage() {
 
   return (
     <div className="p-8 space-y-6">
-      <div>
-        <h1 className="text-2xl font-bold text-foreground">Logs</h1>
-        <p className="text-muted-foreground text-sm">Full audit trail of every action in the system.</p>
+      <div className="flex items-center gap-3">
+        <div
+          className="w-10 h-10 rounded-xl flex items-center justify-center shrink-0"
+          style={{ background: "hsl(258 82% 64% / 0.12)" }}
+        >
+          <ScrollText className="w-5 h-5" style={{ color: "hsl(258 82% 64%)" }} />
+        </div>
+        <div>
+          <h1 className="text-2xl font-bold text-foreground tracking-tight">Logs</h1>
+          <p className="text-muted-foreground text-sm">Full audit trail of every action in the system.</p>
+        </div>
       </div>
 
-      <Card>
+      <Card className="border-border/60 overflow-hidden">
         <CardContent className="p-0">
           <Tabs defaultValue="activity" className="w-full">
-            <div className="p-4 border-b border-border">
+            <div className="px-4 pt-4 pb-0" style={{ borderBottom: "1px solid hsl(var(--border))" }}>
               <TabsList>
-                <TabsTrigger value="activity">Activity Logs</TabsTrigger>
-                <TabsTrigger value="trade">Trade Logs</TabsTrigger>
+                <TabsTrigger value="activity" className="gap-1.5">
+                  <Activity className="w-3.5 h-3.5" /> Activity Logs
+                </TabsTrigger>
+                <TabsTrigger value="trade" className="gap-1.5">
+                  <ListChecks className="w-3.5 h-3.5" /> Trade Logs
+                </TabsTrigger>
               </TabsList>
             </div>
 
@@ -304,109 +375,133 @@ export function LogsPage() {
             <TabsContent value="activity" className="m-0">
               <div className="p-4 space-y-4">
                 {/* Summary cards */}
-                <div className="grid grid-cols-4 gap-3">
-                  {[
-                    { label: "Total", value: sysCounts.total, color: "text-foreground" },
-                    { label: "Info", value: sysCounts.info, color: "text-blue-400" },
-                    { label: "Warn", value: sysCounts.warn, color: "text-yellow-400" },
-                    { label: "Error", value: sysCounts.error, color: "text-red-400" },
-                  ].map((s) => (
-                    <Card key={s.label}>
-                      <CardContent className="pt-4 pb-3">
-                        <p className="text-xs text-muted-foreground uppercase tracking-wide">{s.label}</p>
-                        <p className={`text-2xl font-bold mt-1 ${s.color}`}>{s.value}</p>
-                      </CardContent>
-                    </Card>
-                  ))}
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                  <StatCard label="Total" value={sysCounts.total} color="hsl(var(--foreground))" icon={ScrollText} />
+                  <StatCard label="Info" value={sysCounts.info} color="hsl(217 91% 60%)" icon={Info} />
+                  <StatCard label="Warn" value={sysCounts.warn} color="hsl(38 92% 50%)" icon={AlertTriangle} />
+                  <StatCard label="Error" value={sysCounts.error} color="hsl(345 88% 58%)" icon={AlertCircle} />
                 </div>
 
                 {/* Filters */}
-                <div className="flex flex-wrap items-end gap-3">
-                  <div className="space-y-1">
-                    <Label className="text-xs">Level</Label>
-                    <Select value={level} onValueChange={setLevel}>
-                      <SelectTrigger className="w-32">
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="all">All</SelectItem>
-                        <SelectItem value="info">Info</SelectItem>
-                        <SelectItem value="warn">Warn</SelectItem>
-                        <SelectItem value="error">Error</SelectItem>
-                      </SelectContent>
-                    </Select>
+                <div
+                  className="rounded-xl p-3"
+                  style={{ background: "hsl(var(--muted) / 0.4)", border: "1px solid hsl(var(--border))" }}
+                >
+                  <div className="flex items-center gap-1.5 mb-3 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+                    <Filter className="w-3 h-3" /> Filters
+                    {sysActiveFilters > 0 && (
+                      <span
+                        className="ml-1 px-1.5 py-0.5 rounded-full text-[10px] font-bold"
+                        style={{ background: "hsl(258 82% 64% / 0.15)", color: "hsl(258 82% 64%)" }}
+                      >
+                        {sysActiveFilters} active
+                      </span>
+                    )}
                   </div>
-                  <div className="space-y-1">
-                    <Label className="text-xs">From date</Label>
-                    <Input type="date" value={from} onChange={(e) => setFrom(e.target.value)} className="w-40" />
+                  <div className="flex flex-wrap items-end gap-3">
+                    <FilterField label="Level">
+                      <Select value={level} onValueChange={setLevel}>
+                        <SelectTrigger className="w-32">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="all">All</SelectItem>
+                          <SelectItem value="info">Info</SelectItem>
+                          <SelectItem value="warn">Warn</SelectItem>
+                          <SelectItem value="error">Error</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </FilterField>
+                    <FilterField label="From date">
+                      <Input type="date" value={from} onChange={(e) => setFrom(e.target.value)} className="w-40" />
+                    </FilterField>
+                    <FilterField label="To date">
+                      <Input type="date" value={to} onChange={(e) => setTo(e.target.value)} className="w-40" />
+                    </FilterField>
+                    <div className="flex-1 min-w-48">
+                      <FilterField label="Search">
+                        <div className="relative">
+                          <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-muted-foreground pointer-events-none" />
+                          <Input
+                            placeholder="e.g. Account created, login..."
+                            value={search}
+                            onChange={(e) => setSearch(e.target.value)}
+                            onKeyDown={(e) => e.key === "Enter" && handleApply()}
+                            className="pl-8"
+                          />
+                        </div>
+                      </FilterField>
+                    </div>
+                    <Button onClick={handleApply} className="gap-1.5">
+                      <Search className="w-3.5 h-3.5" /> Apply
+                    </Button>
+                    {sysActiveFilters > 0 && (
+                      <Button variant="outline" onClick={handleReset} className="gap-1.5">
+                        <X className="w-3.5 h-3.5" /> Reset
+                      </Button>
+                    )}
+                    <Button variant="outline" onClick={() => refetch()} disabled={isFetching} className="gap-1.5">
+                      <RefreshCw className={`w-3.5 h-3.5 ${isFetching ? "animate-spin" : ""}`} />
+                      {isFetching ? "Refreshing…" : "Refresh"}
+                    </Button>
                   </div>
-                  <div className="space-y-1">
-                    <Label className="text-xs">To date</Label>
-                    <Input type="date" value={to} onChange={(e) => setTo(e.target.value)} className="w-40" />
-                  </div>
-                  <div className="space-y-1 flex-1 min-w-48">
-                    <Label className="text-xs">Search</Label>
-                    <Input
-                      placeholder="e.g. Account created, login..."
-                      value={search}
-                      onChange={(e) => setSearch(e.target.value)}
-                      onKeyDown={(e) => e.key === "Enter" && handleApply()}
-                    />
-                  </div>
-                  <Button onClick={handleApply}>Apply</Button>
-                  <Button variant="outline" onClick={handleReset}>
-                    Reset
-                  </Button>
-                  <Button variant="outline" onClick={() => refetch()} disabled={isFetching}>
-                    {isFetching ? "Refreshing..." : "Refresh"}
-                  </Button>
                 </div>
               </div>
 
               {/* Table */}
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead className="w-44">Time</TableHead>
-                    <TableHead className="w-24">Level</TableHead>
-                    <TableHead className="w-60">Action</TableHead>
-                    <TableHead>Details</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {sysLoading ? (
-                    <TableRow>
-                      <TableCell colSpan={4} className="text-center py-12 text-muted-foreground">
-                        Loading...
-                      </TableCell>
+              <div className="overflow-x-auto">
+                <Table>
+                  <TableHeader>
+                    <TableRow className="hover:bg-transparent">
+                      <TableHead className="w-44 pl-6">Time</TableHead>
+                      <TableHead className="w-24">Level</TableHead>
+                      <TableHead className="w-60">Action</TableHead>
+                      <TableHead className="pr-6">Details</TableHead>
                     </TableRow>
-                  ) : !sysLogs?.length ? (
-                    <TableRow>
-                      <TableCell colSpan={4} className="text-center py-12 text-muted-foreground">
-                        No activity logs found.
-                      </TableCell>
-                    </TableRow>
-                  ) : (
-                    pagedSysLogs.map((log) => (
-                      <TableRow key={log.id}>
-                        <TableCell className="text-xs text-muted-foreground font-mono whitespace-nowrap">
-                          {new Date(log.createdAt).toLocaleString()}
-                        </TableCell>
-                        <TableCell>
-                          <Badge variant="outline" className={`gap-1.5 ${levelColors[log.level]}`}>
-                            <span className={`w-1.5 h-1.5 rounded-full inline-block ${levelDot[log.level]}`} />
-                            {log.level}
-                          </Badge>
-                        </TableCell>
-                        <TableCell className="font-medium text-sm">{log.message}</TableCell>
-                        <TableCell className="text-xs text-muted-foreground font-mono">
-                          {formatContext(log.context)}
+                  </TableHeader>
+                  <TableBody>
+                    {sysLoading ? (
+                      <TableRow>
+                        <TableCell colSpan={4} className="text-center py-16 text-muted-foreground">
+                          Loading...
                         </TableCell>
                       </TableRow>
-                    ))
-                  )}
-                </TableBody>
-              </Table>
+                    ) : !sysLogs?.length ? (
+                      <TableRow>
+                        <TableCell colSpan={4} className="text-center py-16 text-muted-foreground">
+                          No activity logs found.
+                        </TableCell>
+                      </TableRow>
+                    ) : (
+                      pagedSysLogs.map((log, idx) => {
+                        const cfg = levelConfig[log.level] ?? levelConfig.info;
+                        const Icon = cfg.icon;
+                        return (
+                          <TableRow
+                            key={log.id}
+                            className="hover:bg-muted/30 transition-colors"
+                            style={{ background: idx % 2 === 0 ? "transparent" : "hsl(var(--muted) / 0.15)" }}
+                          >
+                            <TableCell className="text-xs text-muted-foreground font-mono whitespace-nowrap pl-6">
+                              {new Date(log.createdAt).toLocaleString()}
+                            </TableCell>
+                            <TableCell>
+                              <Badge variant="outline" className={`gap-1.5 ${cfg.badge}`}>
+                                <Icon className="w-3 h-3" style={{ color: cfg.iconColor }} />
+                                {log.level}
+                              </Badge>
+                            </TableCell>
+                            <TableCell className="font-medium text-sm">{log.message}</TableCell>
+                            <TableCell className="text-xs text-muted-foreground font-mono pr-6">
+                              {formatContext(log.context)}
+                            </TableCell>
+                          </TableRow>
+                        );
+                      })
+                    )}
+                  </TableBody>
+                </Table>
+              </div>
 
               <TablePagination
                 currentPage={sysPage}
@@ -416,7 +511,7 @@ export function LogsPage() {
                 totalItems={sysLogs?.length ?? 0}
               />
 
-              <div className="px-4 py-2 text-xs text-muted-foreground border-t border-border">
+              <div className="px-6 py-3 text-xs text-muted-foreground" style={{ borderTop: "1px solid hsl(var(--border))" }}>
                 Fetching up to 200 most recent entries from the server.
               </div>
             </TabsContent>
@@ -427,116 +522,129 @@ export function LogsPage() {
             <TabsContent value="trade" className="m-0">
               <div className="p-4 space-y-4">
                 {/* Summary cards */}
-                <div className="grid grid-cols-3 gap-3">
-                  {[
-                    { label: "Total", value: tlCounts.total, color: "text-foreground" },
-                    { label: "Executed / Raised", value: tlCounts.executed, color: "text-green-400" },
-                    { label: "Failed", value: tlCounts.failed, color: "text-red-400" },
-                  ].map((s) => (
-                    <Card key={s.label}>
-                      <CardContent className="pt-4 pb-3">
-                        <p className="text-xs text-muted-foreground uppercase tracking-wide">{s.label}</p>
-                        <p className={`text-2xl font-bold mt-1 ${s.color}`}>{s.value}</p>
-                      </CardContent>
-                    </Card>
-                  ))}
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                  <StatCard label="Total" value={tlCounts.total} color="hsl(var(--foreground))" icon={ListChecks} />
+                  <StatCard label="Executed / Raised" value={tlCounts.executed} color="hsl(162 88% 42%)" icon={ArrowUpRight} />
+                  <StatCard label="Failed" value={tlCounts.failed} color="hsl(345 88% 58%)" icon={ArrowDownRight} />
                 </div>
 
                 {/* Filters */}
-                <div className="flex flex-wrap items-end gap-3">
-                  <div className="space-y-1">
-                    <Label className="text-xs">Account</Label>
-                    <Select value={tlAccount} onValueChange={handleTradeFilterChange(setTlAccount)}>
-                      <SelectTrigger className="w-36">
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="all">All</SelectItem>
-                        {accountOptions.map((a) => (
-                          <SelectItem key={a} value={a}>{a}</SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
+                <div
+                  className="rounded-xl p-3"
+                  style={{ background: "hsl(var(--muted) / 0.4)", border: "1px solid hsl(var(--border))" }}
+                >
+                  <div className="flex items-center gap-1.5 mb-3 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+                    <Filter className="w-3 h-3" /> Filters
+                    {tlActiveFilters > 0 && (
+                      <span
+                        className="ml-1 px-1.5 py-0.5 rounded-full text-[10px] font-bold"
+                        style={{ background: "hsl(258 82% 64% / 0.15)", color: "hsl(258 82% 64%)" }}
+                      >
+                        {tlActiveFilters} active
+                      </span>
+                    )}
                   </div>
-                  <div className="space-y-1">
-                    <Label className="text-xs">Symbol</Label>
-                    <Select value={tlSymbol} onValueChange={handleTradeFilterChange(setTlSymbol)}>
-                      <SelectTrigger className="w-32">
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="all">All</SelectItem>
-                        {symbolOptions.map((s) => (
-                          <SelectItem key={s} value={s}>{s}</SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
+                  <div className="flex flex-wrap items-end gap-3">
+                    <FilterField label="Account">
+                      <Select value={tlAccount} onValueChange={handleTradeFilterChange(setTlAccount)}>
+                        <SelectTrigger className="w-36">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="all">All</SelectItem>
+                          {accountOptions.map((a) => (
+                            <SelectItem key={a} value={a}>{a}</SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </FilterField>
+                    <FilterField label="Symbol">
+                      <Select value={tlSymbol} onValueChange={handleTradeFilterChange(setTlSymbol)}>
+                        <SelectTrigger className="w-32">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="all">All</SelectItem>
+                          {symbolOptions.map((s) => (
+                            <SelectItem key={s} value={s}>{s}</SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </FilterField>
+                    <FilterField label="Side">
+                      <Select value={tlSide} onValueChange={handleTradeFilterChange(setTlSide)}>
+                        <SelectTrigger className="w-28">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="all">All</SelectItem>
+                          <SelectItem value="BUY">Buy</SelectItem>
+                          <SelectItem value="SELL">Sell</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </FilterField>
+                    <FilterField label="Status">
+                      <Select value={tlStatus} onValueChange={handleTradeFilterChange(setTlStatus)}>
+                        <SelectTrigger className="w-32">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="all">All</SelectItem>
+                          {statusOptions.map((s) => (
+                            <SelectItem key={s} value={s}>{s}</SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </FilterField>
+                    <FilterField label="From date">
+                      <Input
+                        type="date"
+                        value={tlFrom}
+                        onChange={(e) => { setTlFrom(e.target.value); setTradePage(1); }}
+                        className="w-40"
+                      />
+                    </FilterField>
+                    <FilterField label="To date">
+                      <Input
+                        type="date"
+                        value={tlTo}
+                        onChange={(e) => { setTlTo(e.target.value); setTradePage(1); }}
+                        className="w-40"
+                      />
+                    </FilterField>
+                    <div className="flex-1 min-w-56">
+                      <FilterField label="Search">
+                        <div className="relative">
+                          <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-muted-foreground pointer-events-none" />
+                          <Input
+                            placeholder="Search account, phone, symbol, error..."
+                            value={tlSearch}
+                            onChange={(e) => { setTlSearch(e.target.value); setTradePage(1); }}
+                            className="pl-8"
+                          />
+                        </div>
+                      </FilterField>
+                    </div>
+                    {tlActiveFilters > 0 && (
+                      <Button variant="outline" onClick={handleTlReset} className="gap-1.5">
+                        <X className="w-3.5 h-3.5" /> Reset
+                      </Button>
+                    )}
                   </div>
-                  <div className="space-y-1">
-                    <Label className="text-xs">Side</Label>
-                    <Select value={tlSide} onValueChange={handleTradeFilterChange(setTlSide)}>
-                      <SelectTrigger className="w-28">
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="all">All</SelectItem>
-                        <SelectItem value="BUY">Buy</SelectItem>
-                        <SelectItem value="SELL">Sell</SelectItem>
-                      </SelectContent>
-                    </Select>
-                  </div>
-                  <div className="space-y-1">
-                    <Label className="text-xs">Status</Label>
-                    <Select value={tlStatus} onValueChange={handleTradeFilterChange(setTlStatus)}>
-                      <SelectTrigger className="w-32">
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="all">All</SelectItem>
-                        {statusOptions.map((s) => (
-                          <SelectItem key={s} value={s}>{s}</SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  </div>
-                  <div className="space-y-1">
-                    <Label className="text-xs">From date</Label>
-                    <Input
-                      type="date"
-                      value={tlFrom}
-                      onChange={(e) => { setTlFrom(e.target.value); setTradePage(1); }}
-                      className="w-40"
-                    />
-                  </div>
-                  <div className="space-y-1">
-                    <Label className="text-xs">To date</Label>
-                    <Input
-                      type="date"
-                      value={tlTo}
-                      onChange={(e) => { setTlTo(e.target.value); setTradePage(1); }}
-                      className="w-40"
-                    />
-                  </div>
-                  <div className="space-y-1 flex-1 min-w-48">
-                    <Label className="text-xs">Search</Label>
-                    <Input
-                      placeholder="Search account, symbol, error..."
-                      value={tlSearch}
-                      onChange={(e) => { setTlSearch(e.target.value); setTradePage(1); }}
-                    />
-                  </div>
-                  <Button variant="outline" onClick={handleTlReset}>
-                    Reset
-                  </Button>
                 </div>
               </div>
 
               <div className="overflow-x-auto">
                 <Table>
                   <TableHeader>
-                    <TableRow>
-                      <TableHead className="whitespace-nowrap">Time</TableHead>
+                    <TableRow className="hover:bg-transparent">
+                      <TableHead className="whitespace-nowrap pl-6">Time</TableHead>
                       <TableHead>Account</TableHead>
+                      <TableHead className="gap-1">
+                        <span className="inline-flex items-center gap-1">
+                          <Phone className="w-3 h-3" /> Phone
+                        </span>
+                      </TableHead>
                       <TableHead>Symbol</TableHead>
                       <TableHead>Action</TableHead>
                       <TableHead>Qty</TableHead>
@@ -546,33 +654,49 @@ export function LogsPage() {
                       <TableHead>Margin Req.</TableHead>
                       <TableHead>Remaining Bal.</TableHead>
                       <TableHead>Status</TableHead>
-                      <TableHead>Source</TableHead>
-                      <TableHead>Error</TableHead>
+                      {/* <TableHead>Source</TableHead> */}
+                      <TableHead className="pr-6">Error</TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
                     {pagedTradeLogs.length === 0 ? (
                       <TableRow>
-                        <TableCell colSpan={13} className="text-center py-12 text-muted-foreground">
+                        <TableCell colSpan={14} className="text-center py-16 text-muted-foreground">
                           {allTradeLogs.length === 0 ? "No trade logs." : "No trade logs match these filters."}
                         </TableCell>
                       </TableRow>
                     ) : (
-                      pagedTradeLogs.map((log) => {
+                      pagedTradeLogs.map((log, idx) => {
                         const notional = calcNotional(log.quantity, log.price);
                         const margin = calcMargin(log.quantity, log.price, log.leverage);
                         const rawBalance = getRawBalance(log.accountId);
                         const remaining = margin != null && rawBalance != null ? rawBalance - margin : null;
+                        const isBuy = log.side === "BUY";
 
                         return (
-                          <TableRow key={log.id}>
-                            <TableCell className="whitespace-nowrap text-xs text-muted-foreground">
+                          <TableRow
+                            key={log.id}
+                            className="hover:bg-muted/30 transition-colors"
+                            style={{ background: idx % 2 === 0 ? "transparent" : "hsl(var(--muted) / 0.15)" }}
+                          >
+                            <TableCell className="whitespace-nowrap text-xs text-muted-foreground pl-6">
                               {new Date(log.createdAt).toLocaleString()}
                             </TableCell>
-                            <TableCell className="text-sm">{log.accountName}</TableCell>
+                            <TableCell className="text-sm font-medium">{log.accountName}</TableCell>
+                            <TableCell className="text-xs font-mono text-muted-foreground whitespace-nowrap">
+                              {getMobileNumber(log.accountId, log.accountName)}
+                            </TableCell>
                             <TableCell className="font-bold text-sm">{log.symbol}</TableCell>
                             <TableCell>
-                              <span className={log.side === "BUY" ? "text-green-400" : "text-red-400"}>
+                              <span
+                                className="inline-flex items-center gap-1 text-xs font-bold px-2 py-0.5 rounded-full"
+                                style={
+                                  isBuy
+                                    ? { background: "hsl(162 88% 42% / 0.12)", color: "hsl(162 88% 42%)" }
+                                    : { background: "hsl(345 88% 58% / 0.12)", color: "hsl(345 88% 58%)" }
+                                }
+                              >
+                                {isBuy ? <ArrowUpRight className="w-3 h-3" /> : <ArrowDownRight className="w-3 h-3" />}
                                 {log.side} {log.orderType}
                               </span>
                             </TableCell>
@@ -607,8 +731,8 @@ export function LogsPage() {
                                 {log.status}
                               </Badge>
                             </TableCell>
-                            <TableCell className="text-xs text-muted-foreground">{log.firedVia}</TableCell>
-                            <TableCell className="text-xs text-red-400 max-w-[200px] truncate" title={log.errorMessage ?? undefined}>
+                            {/* <TableCell className="text-xs text-muted-foreground">{log.firedVia}</TableCell> */}
+                            <TableCell className="text-xs text-red-400 max-w-[200px] truncate pr-6" title={log.errorMessage ?? undefined}>
                               {log.errorMessage ?? "—"}
                             </TableCell>
                           </TableRow>
@@ -627,7 +751,7 @@ export function LogsPage() {
                 totalItems={filteredTradeLogs.length}
               />
 
-              <div className="px-4 py-2 text-xs text-muted-foreground border-t border-border">
+              <div className="px-6 py-3 text-xs text-muted-foreground" style={{ borderTop: "1px solid hsl(var(--border))" }}>
                 Showing {filteredTradeLogs.length} of {allTradeLogs.length} trade log entr
                 {allTradeLogs.length === 1 ? "y" : "ies"}. Margin Req. / Remaining Bal. use each
                 trade's recorded leverage and the account's <em>current</em> balance — remaining

@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useMemo } from "react";
 import {
   useListAccounts,
   useCreateAccount,
@@ -20,6 +20,14 @@ import { useToast } from "@/hooks/use-toast";
 import { useQueryClient } from "@tanstack/react-query";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { TablePagination } from "@/components/TablePagination";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { Search, X } from "lucide-react";
 
 const ACCOUNTS_PAGE_SIZE = 10;
 
@@ -36,6 +44,10 @@ type AccountRow = {
 };
 
 type SelectionMap = Map<number, number>; // accountId -> multiplier
+
+type StatusFilter = "all" | "active" | "disabled";
+type SelectedFilter = "all" | "selected" | "unselected";
+type BalanceFilter = "all" | "with" | "without";
 
 const fmtBalance = (v?: string | null) => {
   if (v == null) return "—";
@@ -57,6 +69,12 @@ export function AccountsPage() {
 
   // ── Pagination ──
   const [accountsPage, setAccountsPage] = useState(1);
+
+  // ── Search & Filters ──
+  const [searchQuery, setSearchQuery] = useState("");
+  const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
+  const [selectedFilter, setSelectedFilter] = useState<SelectedFilter>("all");
+  const [balanceFilter, setBalanceFilter] = useState<BalanceFilter>("all");
 
   const [isAddOpen, setIsAddOpen] = useState(false);
   const [name, setName] = useState("");
@@ -297,8 +315,52 @@ export function AccountsPage() {
     });
   };
 
-  const rows = (accounts ?? []) as AccountRow[];
-  const selectableCount = rows.filter((a) => a.isActive).length;
+  const allRows = (accounts ?? []) as AccountRow[];
+  const selectableCount = allRows.filter((a) => a.isActive).length;
+
+  // ── Apply search + filters ──
+  const rows = useMemo(() => {
+    const q = searchQuery.trim().toLowerCase();
+    return allRows.filter((acc) => {
+      if (q) {
+        const matches =
+          acc.name.toLowerCase().includes(q) ||
+          acc.mobileNumber.toLowerCase().includes(q);
+        if (!matches) return false;
+      }
+
+      if (statusFilter === "active" && !acc.isActive) return false;
+      if (statusFilter === "disabled" && acc.isActive) return false;
+
+      const isSelected = selection.has(acc.id);
+      if (selectedFilter === "selected" && !isSelected) return false;
+      if (selectedFilter === "unselected" && isSelected) return false;
+
+      const hasBalance = acc.currentBalance != null && acc.currentBalance !== "";
+      if (balanceFilter === "with" && !hasBalance) return false;
+      if (balanceFilter === "without" && hasBalance) return false;
+
+      return true;
+    });
+  }, [allRows, searchQuery, statusFilter, selectedFilter, balanceFilter, selection]);
+
+  const hasActiveFilters =
+    searchQuery.trim() !== "" ||
+    statusFilter !== "all" ||
+    selectedFilter !== "all" ||
+    balanceFilter !== "all";
+
+  const clearFilters = () => {
+    setSearchQuery("");
+    setStatusFilter("all");
+    setSelectedFilter("all");
+    setBalanceFilter("all");
+  };
+
+  // Reset to page 1 whenever the filtered set changes.
+  useEffect(() => {
+    setAccountsPage(1);
+  }, [searchQuery, statusFilter, selectedFilter, balanceFilter]);
 
   // ── Paginated slice ──
   const totalAccountPages = Math.max(1, Math.ceil(rows.length / ACCOUNTS_PAGE_SIZE));
@@ -329,6 +391,69 @@ export function AccountsPage() {
         </div>
       </div>
 
+      {/* Search & Filters */}
+      <Card>
+        <CardContent className="p-4">
+          <div className="flex flex-wrap items-center gap-3">
+            <div className="relative flex-1 min-w-[220px]">
+              <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+              <Input
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                placeholder="Search by name or mobile number..."
+                className="pl-8"
+              />
+            </div>
+
+            <Select value={statusFilter} onValueChange={(v) => setStatusFilter(v as StatusFilter)}>
+              <SelectTrigger className="w-[150px]">
+                <SelectValue placeholder="Status" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">All Statuses</SelectItem>
+                <SelectItem value="active">Active</SelectItem>
+                <SelectItem value="disabled">Disabled</SelectItem>
+              </SelectContent>
+            </Select>
+
+            <Select value={selectedFilter} onValueChange={(v) => setSelectedFilter(v as SelectedFilter)}>
+              <SelectTrigger className="w-[170px]">
+                <SelectValue placeholder="Trading Selection" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">All Accounts</SelectItem>
+                <SelectItem value="selected">Selected for Trading</SelectItem>
+                <SelectItem value="unselected">Not Selected</SelectItem>
+              </SelectContent>
+            </Select>
+
+            <Select value={balanceFilter} onValueChange={(v) => setBalanceFilter(v as BalanceFilter)}>
+              <SelectTrigger className="w-[170px]">
+                <SelectValue placeholder="Balance" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">Any Balance</SelectItem>
+                <SelectItem value="with">Has Balance Data</SelectItem>
+                <SelectItem value="without">No Balance Data</SelectItem>
+              </SelectContent>
+            </Select>
+
+            {hasActiveFilters && (
+              <Button variant="ghost" size="sm" onClick={clearFilters} className="gap-1">
+                <X className="h-3.5 w-3.5" />
+                Clear
+              </Button>
+            )}
+          </div>
+
+          {hasActiveFilters && (
+            <p className="text-xs text-muted-foreground mt-2">
+              Showing {rows.length} of {allRows.length} account{allRows.length !== 1 ? "s" : ""}.
+            </p>
+          )}
+        </CardContent>
+      </Card>
+
       <Card>
         <CardContent className="p-0">
           <Table>
@@ -350,9 +475,15 @@ export function AccountsPage() {
                 <TableRow>
                   <TableCell colSpan={9} className="text-center py-8 text-muted-foreground">Loading accounts...</TableCell>
                 </TableRow>
-              ) : rows.length === 0 ? (
+              ) : allRows.length === 0 ? (
                 <TableRow>
                   <TableCell colSpan={9} className="text-center py-8 text-muted-foreground">No accounts configured.</TableCell>
+                </TableRow>
+              ) : rows.length === 0 ? (
+                <TableRow>
+                  <TableCell colSpan={9} className="text-center py-8 text-muted-foreground">
+                    No accounts match your search/filters.
+                  </TableCell>
                 </TableRow>
               ) : (
                 pagedRows.map((acc) => {
@@ -533,9 +664,6 @@ export function AccountsPage() {
     </div>
   );
 }
-
-
-
 
 
 // *****************************************29/06/2026***********************************************************

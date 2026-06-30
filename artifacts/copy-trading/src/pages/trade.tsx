@@ -119,6 +119,7 @@ type ConfirmState =
   | { type: "exit_selected"; count: number }
   | { type: "exit_all"; count: number }
   | { type: "cancel_all"; count: number }
+  | { type: "cancel_order"; order: OpenOrder }
   | null;
 
 /* ── Filter types ── */
@@ -165,7 +166,7 @@ const calcMargin = (quantity: string | number, price: string | number, lev: numb
 };
 
 /* ── constants ── */
-const LEVERAGE_PRESETS = [5, 10, 20, 50];
+const LEVERAGE_PRESETS = [5, 10, 20, 30, 50];
 const ORDER_TYPES: { value: OrderPayloadOrderType; label: string }[] = [
   { value: "MARKET", label: "Market" },
   { value: "LIMIT", label: "Limit" },
@@ -531,8 +532,11 @@ function AutoPunchDrawer({
 
   useEffect(() => { setLastSaved(false); }, [orderCount, stepSize, tpPoints]);
 
-  const getAccountName = (id: number) =>
-    activeAccounts.find((a) => a.id === id)?.name ?? `Account ${id}`;
+  const getAccountName = (accountId: number) =>
+    activeAccounts.find((a) => a.id === accountId)?.name ?? `Account ${accountId}`;
+
+  const getMobileNumber = (accountId: number) =>
+    (activeAccounts.find((a) => a.id === accountId) as any)?.mobileNumber ?? "—";
 
   const getBalance = (id: number): string | null => {
     const b = balances?.find((b) => b.accountId === id);
@@ -1044,6 +1048,7 @@ function ConfirmDialog({ state, onConfirm, onCancel }: { state: ConfirmState; on
     exit_selected: { title: "Exit Selected", desc: state.type === "exit_selected" ? `Close ${state.count} position${state.count !== 1 ? "s" : ""}?` : "", label: `Exit ${state.type === "exit_selected" ? state.count : ""}` },
     exit_all: { title: "Exit All", desc: state.type === "exit_all" ? `Close all ${state.count} position${state.count !== 1 ? "s" : ""}?` : "", label: `Exit All ${state.type === "exit_all" ? state.count : ""}` },
     cancel_all: { title: "Cancel All Orders", desc: state.type === "cancel_all" ? `Cancel ${state.count} open order${state.count !== 1 ? "s" : ""}?` : "", label: `Cancel All` },
+    cancel_order: { title: "Cancel Order", desc: state.type === "cancel_order" ? `Cancel ${state.order.side} ${state.order.orderType} order on ${state.order.symbol} for ${state.order.accountName}?` : "", label: "Cancel Order" },
   }[state.type];
 
   return (
@@ -1170,6 +1175,9 @@ export function TradePage() {
 
   const getAccountName = (accountId: number) =>
     activeAccounts.find((a) => a.id === accountId)?.name ?? `Account ${accountId}`;
+
+  const getMobileNumber = (accountId: number) =>
+    (activeAccounts.find((a) => a.id === accountId) as any)?.mobileNumber ?? "—";
 
   const getBalance = (accountId: number) => {
     const b = (balances as Array<{ accountId: number; balance: number }> | undefined)?.find((b) => b.accountId === accountId);
@@ -1307,14 +1315,15 @@ export function TradePage() {
     });
   }, [cancelAllMut, effectiveAccountIds, activeAccounts, symbol, refetchOrders, toast]);
 
-  const handleConfirm = useCallback(() => {
-    if (!confirmState) return;
-    setConfirmState(null);
-    if (confirmState.type === "exit_one") doExitPosition(confirmState.pos);
-    else if (confirmState.type === "exit_selected") doExitSelected();
-    else if (confirmState.type === "exit_all") doExitAll();
-    else if (confirmState.type === "cancel_all") doCancelAll();
-  }, [confirmState, doExitPosition, doExitSelected, doExitAll, doCancelAll]);
+  // const handleConfirm = useCallback(() => {
+  //   if (!confirmState) return;
+  //   setConfirmState(null);
+  //   if (confirmState.type === "exit_one") doExitPosition(confirmState.pos);
+  //   else if (confirmState.type === "exit_selected") doExitSelected();
+  //   else if (confirmState.type === "exit_all") doExitAll();
+  //   else if (confirmState.type === "cancel_all") doCancelAll();
+  //   else if (confirmState.type === "cancel_order") handleCancelOrder(confirmState.order);
+  // }, [confirmState, doExitPosition, doExitSelected, doExitAll, doCancelAll, handleCancelOrder]);
 
   const handleApplyTpsl = useCallback((pos: Position) => {
     const key = `${pos.accountId}-${pos.symbol}-${pos.positionSide}`;
@@ -1331,6 +1340,16 @@ export function TradePage() {
       onError: (err: any) => toast({ title: "Cancel Failed", description: err.message, variant: "destructive" }),
     });
   }, [cancelOrderMut, refetchOrders, toast]);
+
+  const handleConfirm = useCallback(() => {
+    if (!confirmState) return;
+    setConfirmState(null);
+    if (confirmState.type === "exit_one") doExitPosition(confirmState.pos);
+    else if (confirmState.type === "exit_selected") doExitSelected();
+    else if (confirmState.type === "exit_all") doExitAll();
+    else if (confirmState.type === "cancel_all") doCancelAll();
+    else if (confirmState.type === "cancel_order") handleCancelOrder(confirmState.order);
+  }, [confirmState, doExitPosition, doExitSelected, doExitAll, doCancelAll, handleCancelOrder]);
 
   const handleModalSave = (additions: SelectedAccount[]) => {
     if (!additions.length) return;
@@ -1367,7 +1386,8 @@ export function TradePage() {
   const filteredPositions = useMemo(() => {
     const q = posFilters.search.toLowerCase().trim();
     return positionsArr.filter((pos) => {
-      if (q && !pos.symbol.toLowerCase().includes(q) && !pos.accountName.toLowerCase().includes(q)) return false;
+      const phone = getMobileNumber(pos.accountId).toLowerCase();
+      if (q && !pos.symbol.toLowerCase().includes(q) && !pos.accountName.toLowerCase().includes(q) && !phone.includes(q)) return false;
       if (posFilters.side !== "ALL" && pos.positionSide !== posFilters.side) return false;
       if (posFilters.pnl !== "ALL") {
         const pnl = typeof pos.unrealisedPnl === "string" ? parseFloat(pos.unrealisedPnl) : pos.unrealisedPnl;
@@ -1382,10 +1402,12 @@ export function TradePage() {
   const filteredOrders = useMemo(() => {
     const q = ordFilters.search.toLowerCase().trim();
     return ordersArr.filter((order) => {
+      const phone = getMobileNumber(order.accountId).toLowerCase();
       if (q &&
         !order.symbol.toLowerCase().includes(q) &&
         !order.accountName.toLowerCase().includes(q) &&
-        !order.orderId.toLowerCase().includes(q)
+        !order.orderId.toLowerCase().includes(q) &&
+        !phone.includes(q)
       ) return false;
       if (ordFilters.side !== "ALL" && order.side !== ordFilters.side) return false;
       if (ordFilters.orderType !== "ALL" && order.orderType !== ordFilters.orderType) return false;
@@ -1476,15 +1498,6 @@ export function TradePage() {
               ))}
             </div>
 
-            {/* Quantity */}
-            <div>
-              <label className="text-[10px] font-semibold uppercase tracking-widest text-muted-foreground mb-1 block">Base Quantity</label>
-              <input className="w-full rounded-lg px-3 py-2.5 text-sm font-mono bg-input border border-border focus:outline-none focus:ring-1 focus:ring-ring transition-colors"
-                type="number" min="0" step="any" value={quantity} onChange={(e) => setQuantity(e.target.value)} placeholder="0.00" />
-              <p className="text-[10px] text-muted-foreground mt-1">Actual = base × account multiplier.</p>
-            </div>
-
-            {/* Price */}
             <div>
               <label className="text-[10px] font-semibold uppercase tracking-widest text-muted-foreground mb-1 block">
                 Price (USDT)
@@ -1498,6 +1511,29 @@ export function TradePage() {
                 </p>
               )}
             </div>
+
+            {/* Quantity */}
+            <div>
+              <label className="text-[10px] font-semibold uppercase tracking-widest text-muted-foreground mb-1 block">Base Quantity</label>
+              <input className="w-full rounded-lg px-3 py-2.5 text-sm font-mono bg-input border border-border focus:outline-none focus:ring-1 focus:ring-ring transition-colors"
+                type="number" min="0" step="any" value={quantity} onChange={(e) => setQuantity(e.target.value)} placeholder="0.00" />
+              <p className="text-[10px] text-muted-foreground mt-1">Actual = base × account multiplier.</p>
+            </div>
+
+            {/* Price */}
+            {/* <div>
+              <label className="text-[10px] font-semibold uppercase tracking-widest text-muted-foreground mb-1 block">
+                Price (USDT)
+                {autoPunchEnabled && <span className="ml-1" style={{ color: "hsl(258 82% 60%)" }}>· auto-punch entry</span>}
+              </label>
+              <input className="w-full rounded-lg px-3 py-2.5 text-sm font-mono bg-input border border-border focus:outline-none focus:ring-1 focus:ring-ring transition-colors"
+                type="number" min="0" step="any" value={price} onChange={(e) => setPrice(e.target.value)} placeholder="0.00" />
+              {autoPunchEnabled && autoPunchConfig && (
+                <p className="text-[10px] mt-1" style={{ color: "hsl(258 82% 60%)" }}>
+                  ⚡ Will punch {autoPunchConfig.orderCount} limits from this price after trade.
+                </p>
+              )}
+            </div> */}
 
             {/* TP/SL */}
             <button onClick={() => setShowTpsl((v) => !v)} className="flex items-center justify-between w-full px-3 py-2 rounded-lg text-xs font-semibold transition-colors"
@@ -1526,61 +1562,108 @@ export function TradePage() {
                 <label className="text-[10px] font-semibold uppercase tracking-widest text-muted-foreground">Leverage</label>
                 <span className="text-xs font-bold" style={{ color: "hsl(var(--primary))" }}>{leverage}×</span>
               </div>
-              <div className="flex gap-1 flex-wrap">
-                {LEVERAGE_PRESETS.map((lv) => (
-                  <button key={lv} onClick={() => setLeverage(lv)} className="px-2.5 py-1 rounded-md text-xs font-bold transition-all"
-                    style={leverage === lv ? { background: "hsl(258 82% 64% / 0.2)", color: "hsl(var(--primary))", border: "1px solid hsl(258 82% 64% / 0.4)" } : { background: "hsl(var(--muted))", color: "hsl(var(--muted-foreground))", border: "1px solid transparent" }}>
-                    {lv}×
-                  </button>
-                ))}
-              </div>
+<div className="flex items-center justify-between gap-3">
+  {/* Leverage Presets */}
+  <div className="flex gap-1 flex-wrap">
+    {LEVERAGE_PRESETS.map((lv) => (
+      <button
+        key={lv}
+        onClick={() => setLeverage(lv)}
+        className="px-1.5 py-0.5 rounded text-[11px] font-semibold transition-all"
+        style={
+          leverage === lv
+            ? {
+                background: "hsl(258 82% 64% / 0.2)",
+                color: "hsl(var(--primary))",
+                border: "1px solid hsl(258 82% 64% / 0.4)",
+              }
+            : {
+                background: "hsl(var(--muted))",
+                color: "hsl(var(--muted-foreground))",
+                border: "1px solid transparent",
+              }
+        }
+      >
+        {lv}×
+      </button>
+    ))}
+  </div>
+
+  {/* Set Button */}
+  <button
+    onClick={handleSetLeverage}
+    disabled={leverageMut.isPending || effectiveAccountIds.length === 0}
+    className="px-4 py-1.5 rounded-xl font-semibold text-xs whitespace-nowrap transition-all disabled:opacity-50"
+    style={{
+      border: "1px solid hsl(258 82% 64% / 0.35)",
+      color: "hsl(var(--primary))",
+      background: "hsl(258 82% 64% / 0.06)",
+    }}
+  >
+    {leverageMut.isPending ? "Setting…" : `Set ${leverage}×`}
+  </button>
+</div>
             </div>
 
             {/* Auto-punch toggle */}
-            <div
-              className="rounded-xl p-3 space-y-2"
-              style={{
-                border: autoPunchEnabled ? "1px solid hsl(258 82% 64% / 0.4)" : "1px solid hsl(var(--border))",
-                background: autoPunchEnabled ? "hsl(258 82% 64% / 0.05)" : "transparent",
-              }}
-            >
-              <div className="flex items-center justify-between gap-3">
-                <div className="min-w-0">
-                  <span className="text-xs font-bold">Auto-punch Limits</span>
-                  {autoPunchEnabled && autoPunchConfig && (
-                    <p className="text-[10px] text-muted-foreground mt-0.5">
-                      {autoPunchConfig.orderCount} orders · {autoPunchConfig.stepSize} pt step · {autoPunchConfig.tpPoints} pt TP
-                    </p>
-                  )}
-                  {!autoPunchConfig && (
-                    <p className="text-[10px] text-muted-foreground mt-0.5">Configure before enabling.</p>
-                  )}
-                </div>
-                <button
-                  onClick={() => {
-                    if (!autoPunchConfig && !autoPunchEnabled) {
-                      setShowAutoPunchDrawer(true);
-                    } else {
-                      setAutoPunchEnabled((v) => !v);
-                    }
-                  }}
-                  className="relative shrink-0 w-10 h-5 rounded-full transition-colors duration-200"
-                  style={{ background: autoPunchEnabled ? "hsl(258 82% 64%)" : "hsl(var(--muted))" }}
-                >
-                  <span className="absolute top-0.5 left-0.5 w-4 h-4 rounded-full bg-white transition-transform duration-200 shadow-sm"
-                    style={{ transform: autoPunchEnabled ? "translateX(20px)" : "translateX(0)" }} />
-                </button>
-              </div>
+            <div className="flex items-center justify-between gap-3">
+  <div className="min-w-0">
+    <div className="flex items-center gap-2">
+      <span className="text-xs font-bold">Auto-punch Limits</span>
 
-              <button
-                onClick={() => setShowAutoPunchDrawer(true)}
-                className="flex items-center gap-1.5 w-full px-2.5 py-1.5 rounded-lg text-[11px] font-semibold transition-all"
-                style={{ background: "hsl(258 82% 64% / 0.1)", color: "hsl(var(--primary))", border: "1px solid hsl(258 82% 64% / 0.25)" }}
-              >
-                <Settings2 className="w-3 h-3" />
-                {autoPunchConfig ? "Open Puncher & Edit Config" : "Configure & Punch"}
-              </button>
-            </div>
+      <button
+        onClick={() => setShowAutoPunchDrawer(true)}
+        className="flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-medium transition-all"
+        style={{
+          background: "hsl(258 82% 64% / 0.1)",
+          color: "hsl(var(--primary))",
+          border: "1px solid hsl(258 82% 64% / 0.25)",
+        }}
+      >
+        <Settings2 className="w-3 h-3" />
+        Edit
+      </button>
+    </div>
+
+    {autoPunchEnabled && autoPunchConfig && (
+      <p className="text-[10px] text-muted-foreground mt-0.5">
+        {autoPunchConfig.orderCount} orders · {autoPunchConfig.stepSize} pt step ·{" "}
+        {autoPunchConfig.tpPoints} pt TP
+      </p>
+    )}
+
+    {!autoPunchConfig && (
+      <p className="text-[10px] text-muted-foreground mt-0.5">
+        Configure before enabling.
+      </p>
+    )}
+  </div>
+
+  <button
+    onClick={() => {
+      if (!autoPunchConfig && !autoPunchEnabled) {
+        setShowAutoPunchDrawer(true);
+      } else {
+        setAutoPunchEnabled((v) => !v);
+      }
+    }}
+    className="relative shrink-0 w-10 h-5 rounded-full transition-colors duration-200"
+    style={{
+      background: autoPunchEnabled
+        ? "hsl(258 82% 64%)"
+        : "hsl(var(--muted))",
+    }}
+  >
+    <span
+      className="absolute top-0.5 left-0.5 w-4 h-4 rounded-full bg-white transition-transform duration-200 shadow-sm"
+      style={{
+        transform: autoPunchEnabled
+          ? "translateX(20px)"
+          : "translateX(0)",
+      }}
+    />
+  </button>
+</div>
 
             {/* Accounts panel */}
             <div className="rounded-xl p-3" style={{ border: "1px solid hsl(var(--border))" }}>
@@ -1636,11 +1719,11 @@ export function TradePage() {
                   : hasPending ? `${side} on ${pendingOnly.length} New Account${pendingOnly.length !== 1 ? "s" : ""}`
                   : `${side} on ${effectiveSelection.length || "—"} Account${effectiveSelection.length !== 1 ? "s" : ""}`}
               </button>
-              <button onClick={handleSetLeverage} disabled={leverageMut.isPending || effectiveAccountIds.length === 0}
+              {/* <button onClick={handleSetLeverage} disabled={leverageMut.isPending || effectiveAccountIds.length === 0}
                 className="w-full py-2 rounded-xl font-semibold text-xs tracking-wide transition-all disabled:opacity-50"
                 style={{ border: "1px solid hsl(258 82% 64% / 0.35)", color: "hsl(var(--primary))", background: "hsl(258 82% 64% / 0.06)" }}>
                 {leverageMut.isPending ? "Setting…" : `Set ${leverage}× Leverage`}
-              </button>
+              </button> */}
             </div>
 
             {/* Multi-order */}
@@ -1753,7 +1836,7 @@ export function TradePage() {
             <TableToolbar
               searchValue={posFilters.search}
               onSearchChange={(v) => setPosFilters((f) => ({ ...f, search: v }))}
-              searchPlaceholder="Search account or symbol…"
+              searchPlaceholder="Search account, phone or symbol…"
               activeFilterCount={posActiveFilters}
               onClearFilters={clearPosFilters}
               resultCount={filteredPositions.length}
@@ -1792,7 +1875,7 @@ export function TradePage() {
             <TableToolbar
               searchValue={ordFilters.search}
               onSearchChange={(v) => setOrdFilters((f) => ({ ...f, search: v }))}
-              searchPlaceholder="Search account, symbol or order ID…"
+              searchPlaceholder="Search account, phone, symbol or order ID…"
               activeFilterCount={ordActiveFilters}
               onClearFilters={clearOrdFilters}
               resultCount={filteredOrders.length}
@@ -1852,7 +1935,7 @@ export function TradePage() {
                         }}
                       />
                     </th>
-                    {["Account", "Symbol", "Side", "Size", "Entry", "Mark", "PnL", "Liq.", "Actions"].map((h) => (
+                    {["Account", "Phone", "Symbol", "Side", "Size", "Entry", "Mark", "PnL", "Liq.", "Actions"].map((h) => (
                       <th key={h} className="px-3 py-2 text-left font-semibold uppercase tracking-wider text-muted-foreground">{h}</th>
                     ))}
                   </tr>
@@ -1860,7 +1943,7 @@ export function TradePage() {
                 <tbody>
                   {filteredPositions.length === 0 ? (
                     <tr>
-                      <td colSpan={10} className="text-center py-16 text-muted-foreground">
+                      <td colSpan={11} className="text-center py-16 text-muted-foreground">
                         {positionsArr.length === 0 ? "No open positions" : (
                           <div className="flex flex-col items-center gap-2">
                             <Filter className="w-6 h-6 opacity-30" />
@@ -1887,6 +1970,7 @@ export function TradePage() {
                               }} />
                             </td>
                             <td className="px-3 py-2.5 font-medium max-w-[100px] truncate">{pos.accountName}</td>
+                            <td className="px-3 py-2.5 font-mono text-muted-foreground">{getMobileNumber(pos.accountId)}</td>
                             <td className="px-3 py-2.5 font-bold font-mono">{pos.symbol}</td>
                             <td className="px-3 py-2.5">
                               <span className="px-2 py-0.5 rounded-full text-[10px] font-bold"
@@ -1909,7 +1993,7 @@ export function TradePage() {
                           </tr>
                           {isTpslOpen && (
                             <tr key={`${posKey}-tpsl`}>
-                              <td colSpan={10} style={{ borderBottom: "1px solid hsl(var(--border))", padding: 0 }}>
+                              <td colSpan={11} style={{ borderBottom: "1px solid hsl(var(--border))", padding: 0 }}>
                                 <div className="flex items-center gap-3 px-6 py-3" style={{ background: "hsl(258 82% 64% / 0.05)", borderTop: "1px dashed hsl(var(--border))" }}>
                                   <span className="text-[10px] font-semibold uppercase tracking-widest text-muted-foreground w-24">{pos.symbol} TP/SL</span>
                                   <div className="flex items-center gap-1.5">
@@ -1941,7 +2025,7 @@ export function TradePage() {
               <table className="w-full text-xs border-collapse">
                 <thead>
                   <tr style={{ background: "hsl(var(--muted))", borderBottom: "1px solid hsl(var(--border))" }}>
-                    {["Account", "Symbol", "Side", "Type", "Qty", "Price", "Margin Req.", "Remaining Bal.", "Status", "Reduce Only", "Created", "Actions"].map((h) => (
+                    {["Account", "Phone", "Symbol", "Side", "Type", "Qty", "Price", "Margin Req.", "Remaining Bal.", "Status", "Reduce Only", "Created", "Actions"].map((h) => (
                       <th key={h} className="px-3 py-2 text-left font-semibold uppercase tracking-wider text-muted-foreground">{h}</th>
                     ))}
                   </tr>
@@ -1949,7 +2033,7 @@ export function TradePage() {
                 <tbody>
                   {filteredOrders.length === 0 ? (
                     <tr>
-                      <td colSpan={12} className="text-center py-16 text-muted-foreground">
+                      <td colSpan={13} className="text-center py-16 text-muted-foreground">
                         {ordersArr.length === 0 ? "No open orders" : (
                           <div className="flex flex-col items-center gap-2">
                             <Filter className="w-6 h-6 opacity-30" />
@@ -1968,6 +2052,7 @@ export function TradePage() {
                       return (
                         <tr key={`${order.accountId}-${order.orderId}`} style={{ borderBottom: "1px solid hsl(var(--border))", background: idx % 2 === 0 ? "transparent" : "hsl(var(--muted) / 0.3)" }}>
                           <td className="px-3 py-2.5 font-medium max-w-[100px] truncate">{order.accountName}</td>
+                          <td className="px-3 py-2.5 font-mono text-muted-foreground">{getMobileNumber(order.accountId)}</td>
                           <td className="px-3 py-2.5 font-bold font-mono">{order.symbol}</td>
                           <td className="px-3 py-2.5">
                             <span className="px-2 py-0.5 rounded-full text-[10px] font-bold"
@@ -1984,7 +2069,7 @@ export function TradePage() {
                           <td className="px-3 py-2.5 text-muted-foreground">{order.reduceOnly ? "Yes" : "—"}</td>
                           <td className="px-3 py-2.5 text-muted-foreground">{order.createdAt ? new Date(order.createdAt).toLocaleTimeString() : "—"}</td>
                           <td className="px-3 py-2.5">
-                            <button onClick={() => handleCancelOrder(order)} disabled={cancelOrderMut.isPending} className="px-2.5 py-1 rounded-md text-[10px] font-bold disabled:opacity-50"
+                            <button onClick={() => setConfirmState({ type: "cancel_order", order })} disabled={cancelOrderMut.isPending} className="px-2.5 py-1 rounded-md text-[10px] font-bold disabled:opacity-50"
                               style={{ border: "1px solid hsl(345 88% 58% / 0.4)", color: "hsl(345 88% 62%)" }}>Cancel</button>
                           </td>
                         </tr>
