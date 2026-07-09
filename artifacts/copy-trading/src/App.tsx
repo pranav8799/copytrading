@@ -20,6 +20,9 @@ import NotFound from "@/pages/not-found";
 import { Layout } from "@/components/layout";
 import { LoginPage } from "@/pages/login";
 import { SelectAccountsPage } from "./pages/select-accounts";
+
+import { RepunchMonitor } from "@/components/repunch-monitor";
+import { AccountDetailPage } from "./pages/account-detail";
 // import { AutoLimitPage } from "./pages/auto-limit-page";
 // import { AutoTradePuncherPage } from "./pages/Autotradepuncher";
 
@@ -66,6 +69,7 @@ function Router() {
             <Route path="/logs" component={LogsPage} />
             <Route path="/settings" component={SettingsPage} />
             <Route path="/select-accounts" component={SelectAccountsPage} />
+            <Route path="/accounts/:id" component={AccountDetailPage} />
             {/* <Route path="/auto-limit" component={AutoTradePuncherPage} /> */}
 
             <Route component={NotFound} />
@@ -82,6 +86,7 @@ function App() {
       <TooltipProvider>
         <WouterRouter base={import.meta.env.BASE_URL.replace(/\/$/, "")}>
           <AuthProvider>
+            <RepunchMonitor />
             <Router />
           </AuthProvider>
         </WouterRouter>

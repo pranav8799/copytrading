@@ -44,6 +44,7 @@ router.post("/orders/open", authMiddleware, async (req, res): Promise<void> => {
         quantity: o.quantity,
         execQuantity: o.exec_quantity,
         price: o.price,
+        triggerPrice: o.trigger_price ?? null,
         avgExecutionPrice: o.avg_execution_price ?? null,
         executionFee: o.execution_fee ?? null,
         realisedPnl: o.realised_pnl ?? null,
@@ -85,7 +86,11 @@ router.post("/orders/closed", authMiddleware, async (req, res): Promise<void> =>
         secretKey,
         body,
       )) as { data: { orders: unknown[] } };
+      // const orders = data?.data?.orders ?? [];
       const orders = data?.data?.orders ?? [];
+if (orders.length > 0) {
+  console.log("RAW COINSWITCH ORDER:", JSON.stringify(orders[0], null, 2));
+}
       return orders.map((o: Record<string, unknown>) => ({
         accountId: acc.id,
         accountName: acc.name,

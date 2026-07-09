@@ -20,6 +20,7 @@ import { useToast } from "@/hooks/use-toast";
 import { useQueryClient } from "@tanstack/react-query";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { TablePagination } from "@/components/TablePagination";
+import { useLocation } from "wouter";
 import {
   Select,
   SelectContent,
@@ -64,6 +65,8 @@ const fmtUpdatedAt = (v?: string | null) => {
 export function AccountsPage() {
   const { data: accounts, isLoading } = useListAccounts();
   const { data: settings, isLoading: settingsLoading } = useGetSettings();
+  const [, setLocation] = useLocation();
+  // const { data: accounts, isLoading } = useListAccounts();
   const queryClient = useQueryClient();
   const { toast } = useToast();
 
@@ -486,44 +489,48 @@ export function AccountsPage() {
                   </TableCell>
                 </TableRow>
               ) : (
-                pagedRows.map((acc) => {
-                  const checked = selection.has(acc.id);
-                  return (
-                    <TableRow key={acc.id}>
-                      <TableCell>
-                        <Checkbox
-                          checked={checked}
-                          disabled={!acc.isActive}
-                          onCheckedChange={(v) => toggleOne(acc.id, !!v)}
-                        />
-                      </TableCell>
-                      <TableCell className="font-medium">{acc.name}</TableCell>
-                      <TableCell className="text-sm">{acc.mobileNumber}</TableCell>
-                      <TableCell>
-                        <div className="flex items-center gap-2">
-                          <Switch
-                            checked={acc.isActive}
-                            onCheckedChange={() => handleToggleActive(acc.id, acc.isActive, acc.name)}
-                          />
-                          {acc.isActive ? (
-                            <span title="Active" className="text-green-500 text-lg">✓</span>
-                          ) : (
-                            <span title="Disabled" className="text-muted-foreground text-lg">✕</span>
-                          )}
-                        </div>
-                      </TableCell>
-                      <TableCell className="font-mono text-sm text-muted-foreground">{fmtBalance(acc.lastBalance)}</TableCell>
-                      <TableCell className="font-mono text-sm">{fmtBalance(acc.currentBalance)}</TableCell>
-                      <TableCell className="text-sm text-muted-foreground">{fmtUpdatedAt(acc.balanceUpdatedAt)}</TableCell>
-                      <TableCell className={`font-mono text-sm ${!checked ? "text-muted-foreground" : ""}`}>
-                        {`${multipliers.get(acc.id) ?? 1}×`}
-                      </TableCell>
-                      <TableCell className="text-right">
-                        <Button variant="outline" size="sm" onClick={() => openEdit(acc)}>Edit</Button>
-                      </TableCell>
-                    </TableRow>
-                  );
-                })
+pagedRows.map((acc) => {
+  const checked = selection.has(acc.id);
+  return (
+    <TableRow
+      key={acc.id}
+      className="cursor-pointer hover:bg-muted/50"
+      onClick={() => setLocation(`/accounts/${acc.id}`)}
+    >
+      <TableCell onClick={(e) => e.stopPropagation()}>
+        <Checkbox
+          checked={checked}
+          disabled={!acc.isActive}
+          onCheckedChange={(v) => toggleOne(acc.id, !!v)}
+        />
+      </TableCell>
+      <TableCell className="font-medium">{acc.name}</TableCell>
+      <TableCell className="text-sm">{acc.mobileNumber}</TableCell>
+      <TableCell onClick={(e) => e.stopPropagation()}>
+        <div className="flex items-center gap-2">
+          <Switch
+            checked={acc.isActive}
+            onCheckedChange={() => handleToggleActive(acc.id, acc.isActive, acc.name)}
+          />
+          {acc.isActive ? (
+            <span title="Active" className="text-green-500 text-lg">✓</span>
+          ) : (
+            <span title="Disabled" className="text-muted-foreground text-lg">✕</span>
+          )}
+        </div>
+      </TableCell>
+      <TableCell className="font-mono text-sm text-muted-foreground">{fmtBalance(acc.lastBalance)}</TableCell>
+      <TableCell className="font-mono text-sm">{fmtBalance(acc.currentBalance)}</TableCell>
+      <TableCell className="text-sm text-muted-foreground">{fmtUpdatedAt(acc.balanceUpdatedAt)}</TableCell>
+      <TableCell className={`font-mono text-sm ${!checked ? "text-muted-foreground" : ""}`}>
+        {`${multipliers.get(acc.id) ?? 1}×`}
+      </TableCell>
+      <TableCell className="text-right" onClick={(e) => e.stopPropagation()}>
+        <Button variant="outline" size="sm" onClick={() => openEdit(acc)}>Edit</Button>
+      </TableCell>
+    </TableRow>
+  );
+})
               )}
             </TableBody>
           </Table>

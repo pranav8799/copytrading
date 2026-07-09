@@ -1,5 +1,6 @@
 import { useState, useCallback, useEffect, useMemo, useRef } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { repunchStore, useWatchedSlots, useAutoPunchEnabled } from "@/lib/repunchStore";
 import {
   useListAccounts,
   useGetBalances,
@@ -7,6 +8,7 @@ import {
   useGetPositions,
   useSetTpsl,
   useSetLeverage,
+  useAddMargin,
   useCancelOrder,
   useCancelAllOrders,
   useUpdateSettings,
@@ -77,7 +79,9 @@ interface OpenOrder {
   side: string;
   orderType: string;
   quantity: string | number;
+  positionSize: string | number;
   price: string | number;
+  triggerPrice?: string | number | null;
   status: string;
   reduceOnly: boolean;
   createdAt: string | null;
@@ -123,6 +127,22 @@ type ConfirmState =
   | { type: "cancel_order"; order: OpenOrder }
   | null;
 
+/* ── STEP 1: WatchedSlot interface ── */
+interface WatchedSlot {
+  id: string;
+  accountId: number;
+  symbol: string;
+  side: OrderPayloadSide;
+  limitPrice: number;
+  tpPrice: number;
+  quantity: number;
+  repunchCount: number;
+  status: "pending_fill" | "placing_tp" | "watching" | "repunching";
+  orderId?: string;       // currently-open ENTRY limit (while pending_fill)
+  seenOpen?: boolean;     // has the entry limit been observed resting on the book
+  tpOrderId?: string;     // currently-open EXIT limit (while watching)
+  tpSeenOpen?: boolean;   // has the exit limit been observed resting on the book
+}
 /* ── Filter types ── */
 interface PositionFilters {
   search: string;
@@ -488,6 +508,7 @@ interface AutoPunchDrawerProps {
   balances: Array<{ accountId: number; availableBalance?: string }> | undefined;
   onConfigSaved: (cfg: AutoPunchConfig) => void;
   savedConfig: AutoPunchConfig | undefined;
+  onSlotsCreated?: (slots: WatchedSlot[]) => void;  // ← STEP 6: added
 }
 
 function AutoPunchDrawer({
@@ -501,6 +522,7 @@ function AutoPunchDrawer({
   balances,
   onConfigSaved,
   savedConfig,
+  onSlotsCreated,  // ← STEP 6: destructured
 }: AutoPunchDrawerProps) {
   const { toast } = useToast();
   const queryClient = useQueryClient();
@@ -601,6 +623,7 @@ function AutoPunchDrawer({
     );
   }, [orderCount, stepSize, tpPoints, updateSettingsMut, queryClient, onConfigSaved, toast]);
 
+  /* ── STEP 7: Updated handleExecute inside AutoPunchDrawer ── */
   const handleExecute = useCallback(async () => {
     if (selectedAccounts.length === 0) {
       toast({ title: "No accounts selected", variant: "destructive" });
@@ -619,6 +642,7 @@ function AutoPunchDrawer({
 
     let totalOk = 0;
     let totalFailed = 0;
+    const newSlots: WatchedSlot[] = [];
 
     for (const order of previewOrders) {
       for (const { accountId } of selectedAccounts) {
@@ -641,16 +665,28 @@ function AutoPunchDrawer({
       );
 
       for (let i = 0; i < selectedAccounts.length; i++) {
-        const { accountId } = selectedAccounts[i];
+        const { accountId, multiplier } = selectedAccounts[i];
         const result = results[i];
         const key = orderKey(order.index, accountId);
-        if (result.status === "fulfilled") {
-          setStatus(key, "success");
-          totalOk++;
-          tpslMut.mutate({
-            data: { accountIds: [accountId], symbol: "XAUUSDT", tpPrice: order.tpPrice },
-          });
-        } else {
+if (result.status === "fulfilled") {
+  setStatus(key, "success");
+  totalOk++;
+  const orderId = (result.value as any)?.[0]?.orderId ?? undefined;
+  // Register slot as pending — TP will be placed once the limit actually fills
+  newSlots.push({
+    id: `${accountId}-XAUUSDT-${side}-${order.limitPrice}`,
+    accountId,
+    symbol: "XAUUSDT",
+    side,
+    limitPrice: order.limitPrice,
+    tpPrice: order.tpPrice,
+    quantity: qty * multiplier,
+    repunchCount: 0,
+    status: "pending_fill",
+    orderId,
+    seenOpen: false,
+  });
+} else {
           const msg = (result.reason as Error)?.message ?? "Unknown error";
           setStatus(key, "failed", msg);
           totalFailed++;
@@ -661,13 +697,18 @@ function AutoPunchDrawer({
     setIsExecuting(false);
     setHasExecuted(true);
 
+    // Hand slots to TradePage for monitoring
+    if (newSlots.length > 0) {
+      onSlotsCreated?.(newSlots);
+    }
+
     toast({
       title: totalFailed === 0
         ? `All ${totalOk} orders punched ✓`
         : `Completed — ${totalOk} ok, ${totalFailed} failed`,
       variant: totalFailed === 0 ? "default" : "destructive",
     });
-  }, [previewOrders, selectedAccounts, side, entryPrice, quantity, entryValid, qtyValid, tpslMut, toast]);
+  }, [previewOrders, selectedAccounts, side, entryPrice, quantity, entryValid, qtyValid, onSlotsCreated, toast]);
 
   if (!open) return null;
 
@@ -680,8 +721,8 @@ function AutoPunchDrawer({
       <div
         className="relative flex rounded-2xl overflow-hidden shadow-2xl"
         style={{
-          width: "min(92vw, 700px)",     // ← was 820px
-    height: "min(90vh, 500px)",    // ← was 600px
+          width: "min(92vw, 700px)",
+          height: "min(90vh, 500px)",
           border: "1px solid hsl(258 82% 64% / 0.3)",
           background: "hsl(var(--card))",
         }}
@@ -1096,15 +1137,23 @@ export function TradePage() {
   const [showTpsl, setShowTpsl] = useState(false);
 
   /* ── auto-punch ── */
-  const [autoPunchEnabled, setAutoPunchEnabled] = useState(false);
+  const autoPunchEnabled = useAutoPunchEnabled();
+const setAutoPunchEnabled = repunchStore.setEnabled;
   const [showAutoPunchDrawer, setShowAutoPunchDrawer] = useState(false);
   const [isPunching, setIsPunching] = useState(false);
   const [localAutoPunchConfig, setLocalAutoPunchConfig] = useState<AutoPunchConfig | undefined>();
+
+  /* ── STEP 2: re-punch monitor state + refs ── */
+const watchedSlots = useWatchedSlots();
+const setWatchedSlots = repunchStore.setSlots;
+const [showMonitor, setShowMonitor] = useState(false);
 
   /* ── right panel ── */
   const [rightTab, setRightTab] = useState<"positions" | "orders">("positions");
   const [expandedTpsl, setExpandedTpsl] = useState<string | null>(null);
   const [posTpValues, setPosTpValues] = useState<Record<string, { tp: string; sl: string }>>({});
+  const [addingMarginKey, setAddingMarginKey] = useState<string | null>(null);
+  const [marginAmounts, setMarginAmounts] = useState<Record<string, string>>({});
   const [selectedPositions, setSelectedPositions] = useState<Set<string>>(new Set());
   const [selectedOrders, setSelectedOrders] = useState<Set<string>>(new Set());
   const [confirmState, setConfirmState] = useState<ConfirmState>(null);
@@ -1141,10 +1190,11 @@ export function TradePage() {
   const { data: accounts } = useListAccounts();
   const { data: balances } = useGetBalances();
   const { data: settings } = useGetSettings();
-  const { data: positions = [], refetch: refetchPositions, isFetching: posLoading } = useGetPositions(
+  const { data: positions = [], refetch: refetchPositions, isFetching: posLoading, isFetched: positionsFetched } = useGetPositions(
     {}, { query: { queryKey: getGetPositionsQueryKey({}), refetchInterval: 10_000 } }
   );
-  const { data: openOrders = [], refetch: refetchOrders, isFetching: ordLoading } = useQuery({
+  
+  const { data: openOrders = [], refetch: refetchOrders, isFetching: ordLoading, isFetched: ordersFetched } = useQuery({
     queryKey: ["openOrders"],
     queryFn: () => getOpenOrders({}),
     refetchInterval: 15_000,
@@ -1154,6 +1204,7 @@ export function TradePage() {
   /* ── mutations ── */
   const tpslMut = useSetTpsl();
   const leverageMut = useSetLeverage();
+  const addMarginMut = useAddMargin(); 
   const cancelOrderMut = useCancelOrder();
   const cancelAllMut = useCancelAllOrders();
   const updateSettingsMut = useUpdateSettings();
@@ -1205,7 +1256,58 @@ export function TradePage() {
     });
   }, [updateSettingsMut, queryClient, toast]);
 
-  /* ── auto-punch background run ── */
+  const positionsArr = positions as Position[];
+
+  
+
+  /* ── STEP 3: repunchSlot callback ── */
+  // const repunchSlot = useCallback(async (slot: WatchedSlot) => {
+  //   try {
+  //     await executeTrade({
+  //       accountIds: [slot.accountId],
+  //       order: {
+  //         symbol: slot.symbol,
+  //         side: slot.side,
+  //         orderType: "LIMIT",
+  //         quantity: slot.quantity,
+  //         price: slot.limitPrice,
+  //       },
+  //     });
+  //     tpslMut.mutate({
+  //       data: {
+  //         accountIds: [slot.accountId],
+  //         symbol: slot.symbol,
+  //         tpPrice: slot.tpPrice,
+  //       },
+  //     });
+  //     setWatchedSlots((prev) =>
+  //       prev.map((s) =>
+  //         s.id === slot.id
+  //           ? { ...s, status: "watching", repunchCount: s.repunchCount + 1 }
+  //           : s
+  //       )
+  //     );
+  //     toast({
+  //       title: `♻ Re-punched @ ${fmt(slot.limitPrice)}`,
+  //       description: `${getAccountName(slot.accountId)} — re-punch #${slot.repunchCount + 1}`,
+  //     });
+  //   } catch (err: any) {
+  //     toast({
+  //       title: "Re-punch failed",
+  //       description: `${fmt(slot.limitPrice)}: ${err.message}`,
+  //       variant: "destructive",
+  //     });
+  //     // Reset to watching so next TP hit can retry
+  //     setWatchedSlots((prev) =>
+  //       prev.map((s) => (s.id === slot.id ? { ...s, status: "watching" } : s))
+  //     );
+  //   }
+  // }, [tpslMut, toast, getAccountName]);
+
+  // // Keep ref in sync
+  // useEffect(() => { repunchFnRef.current = repunchSlot; }, [repunchSlot]);
+
+  /* ── STEP 5: Modified runAutoPunch to register slots ── */
   const runAutoPunch = useCallback(async (
     tradeSymbol: string,
     tradeSide: OrderPayloadSide,
@@ -1215,23 +1317,80 @@ export function TradePage() {
     cfg: AutoPunchConfig
   ) => {
     setIsPunching(true);
-    toast({ title: `⚡ Auto-punching ${cfg.orderCount} limit orders…`, description: `${cfg.stepSize}-pt steps, ${cfg.tpPoints}-pt TP each` });
+    toast({
+      title: `⚡ Auto-punching ${cfg.orderCount} limit orders…`,
+      description: `${cfg.stepSize}-pt steps, ${cfg.tpPoints}-pt TP each`,
+    });
+
     let totalOk = 0, totalFailed = 0;
+    const newSlots: WatchedSlot[] = [];
+
     for (let n = 1; n <= cfg.orderCount; n++) {
-      const limitPrice = tradeSide === "BUY" ? tradeEntryPrice - cfg.stepSize * n : tradeEntryPrice + cfg.stepSize * n;
-      const tp = tradeSide === "BUY" ? limitPrice + cfg.tpPoints : limitPrice - cfg.tpPoints;
-      const results = await Promise.allSettled(
+      const limitPrice = tradeSide === "BUY"
+        ? tradeEntryPrice - cfg.stepSize * n
+        : tradeEntryPrice + cfg.stepSize * n;
+      const tp = tradeSide === "BUY"
+        ? limitPrice + cfg.tpPoints
+        : limitPrice - cfg.tpPoints;
+
+const results = await Promise.allSettled(
         accounts.map(({ accountId, multiplier }) =>
-          executeTrade({ accountIds: [accountId], order: { symbol: tradeSymbol, side: tradeSide, orderType: "LIMIT", quantity: baseQty * multiplier, price: limitPrice } })
-            .then(async (res) => { await tpslMut.mutateAsync({ data: { accountIds: [accountId], symbol: tradeSymbol, tpPrice: tp } }).catch(() => {}); return res; })
+          executeTrade({
+            accountIds: [accountId],
+            order: {
+              symbol: tradeSymbol,
+              side: tradeSide,
+              orderType: "LIMIT",
+              quantity: baseQty * multiplier,
+              price: limitPrice,
+            },
+          })
         )
       );
-      totalOk += results.filter((r) => r.status === "fulfilled").length;
-      totalFailed += results.filter((r) => r.status === "rejected").length;
+
+      results.forEach((result, i) => {
+        const { accountId, multiplier } = accounts[i];
+        if (result.status === "fulfilled") {
+          totalOk++;
+          const orderId = (result.value as any)?.[0]?.orderId ?? undefined;
+newSlots.push({
+            id: `${accountId}-${tradeSymbol}-${tradeSide}-${limitPrice}`,
+            accountId,
+            symbol: tradeSymbol,
+            side: tradeSide,
+            limitPrice,
+            tpPrice: tp,
+            quantity: baseQty * multiplier,
+            repunchCount: 0,
+            status: "pending_fill",
+            orderId,
+            seenOpen: false,
+          });
+        } else {
+          totalFailed++;
+        }
+      });
     }
+
+    // Register all successfully placed slots
+    if (newSlots.length > 0) {
+      setWatchedSlots((prev) => {
+        const newIds = new Set(newSlots.map((s) => s.id));
+        return [...prev.filter((s) => !newIds.has(s.id)), ...newSlots];
+      });
+      setShowMonitor(true);
+    }
+
     setIsPunching(false);
-    toast({ title: totalFailed === 0 ? `⚡ Auto-punch complete — ${totalOk} orders ✓` : `⚡ Done — ${totalOk} ok, ${totalFailed} failed`, variant: totalFailed > 0 ? "destructive" : "default" });
-  }, [tpslMut, toast]);
+    toast({
+      title: totalFailed === 0
+        ? `⚡ Auto-punch complete — ${totalOk} orders ✓`
+        : `⚡ Done — ${totalOk} ok, ${totalFailed} failed`,
+      variant: totalFailed > 0 ? "destructive" : "default",
+    });
+
+    void refetchOrders();
+  }, [toast, refetchOrders]);
 
   /* ── execute main order ── */
   const handleExecute = useCallback(async () => {
@@ -1278,6 +1437,89 @@ export function TradePage() {
       onError: (err: any) => toast({ title: "Leverage Failed", description: err.message, variant: "destructive" }),
     });
   }, [effectiveAccountIds, symbol, leverage, leverageMut, toast]);
+
+  /* ── STEP 4: clear monitor when auto-punch is turned off ── */
+  // useEffect(() => {
+  //   if (!autoPunchEnabled) {
+  //     setWatchedSlots([]);
+  //     setShowMonitor(false);
+  //     prevPositionsRef.current = [];
+  //     positionPnlRef.current.clear();
+  //   }
+  // }, [autoPunchEnabled]);
+
+  /* ── STEP 4: position-close monitor: detect TP hits and re-punch ── */
+  // const positionsArr = positions as Position[];
+
+  // useEffect(() => {
+  //   // Always keep prevPositions up to date, even when not monitoring
+  //   const prevPositions = prevPositionsRef.current;
+
+  //   // Update last-known PnL for all currently open positions
+  //   positionsArr.forEach((p) => {
+  //     const key = `${p.accountId}-${p.symbol}-${p.positionSide}`;
+  //     const pnl = typeof p.unrealisedPnl === "string"
+  //       ? parseFloat(p.unrealisedPnl)
+  //       : (p.unrealisedPnl as number);
+  //     if (!isNaN(pnl)) positionPnlRef.current.set(key, pnl);
+  //   });
+
+  //   if (autoPunchEnabled && watchedSlotsRef.current.length > 0) {
+  //     const currentKeys = new Set(
+  //       positionsArr.map((p) => `${p.accountId}-${p.symbol}-${p.positionSide}`)
+  //     );
+
+  //     for (const prevPos of prevPositions) {
+  //       const key = `${prevPos.accountId}-${prevPos.symbol}-${prevPos.positionSide}`;
+  //       if (currentKeys.has(key)) continue; // still open — skip
+
+  //       // Position just closed
+  //       const lastPnl = positionPnlRef.current.get(key) ?? 0;
+  //       positionPnlRef.current.delete(key);
+
+  //       if (lastPnl <= 0) continue; // SL or breakeven — don't re-punch
+
+  //       // TP hit! Find the closest matching watched slot
+  //       const slotSide: OrderPayloadSide =
+  //         prevPos.positionSide === "LONG" ? "BUY" : "SELL";
+  //       const avgEntry =
+  //         typeof prevPos.avgEntryPrice === "string"
+  //           ? parseFloat(prevPos.avgEntryPrice)
+  //           : (prevPos.avgEntryPrice as number);
+
+  //       const currentSlots = watchedSlotsRef.current;
+  //       const candidates = currentSlots.filter(
+  //         (s) =>
+  //           s.accountId === prevPos.accountId &&
+  //           s.symbol === prevPos.symbol &&
+  //           s.side === slotSide &&
+  //           s.status === "watching"
+  //       );
+
+  //       if (candidates.length === 0) continue;
+
+  //       // Pick slot whose limitPrice is closest to the position's avgEntry
+  //       const best = candidates.reduce((a, b) =>
+  //         Math.abs(a.limitPrice - avgEntry) <= Math.abs(b.limitPrice - avgEntry)
+  //           ? a
+  //           : b
+  //       );
+
+  //       // Optimistically mark as repunching, then fire
+  //       setWatchedSlots((prev) =>
+  //         prev.map((s) => (s.id === best.id ? { ...s, status: "repunching" } : s))
+  //       );
+  //       void repunchFnRef.current?.(best);
+  //     }
+  //   }
+
+  //   prevPositionsRef.current = positionsArr;
+  // }, [positionsArr, autoPunchEnabled]);
+  // NOTE: watchedSlots intentionally NOT in deps — we access it via watchedSlotsRef
+
+
+
+
 
   /* ── exit/cancel ── */
   const doExitPosition = useCallback((pos: Position) => {
@@ -1343,6 +1585,30 @@ export function TradePage() {
     });
   }, [posTpValues, tpslMut, toast]);
 
+const handleAddMargin = useCallback((pos: Position) => {
+  const posKey = `${pos.accountId}-${pos.symbol}-${pos.positionSide}`;
+  const raw = marginAmounts[posKey];
+  const amount = parseFloat(raw ?? "");
+  if (!raw || isNaN(amount) || amount <= 0) {
+    toast({ title: "Enter a valid margin amount", variant: "destructive" });
+    return;
+  }
+  addMarginMut.mutate(
+    { data: { accountId: pos.accountId, symbol: pos.symbol, margin: amount } },
+    {
+      onSuccess: () => {
+        toast({ title: `+${amount} USDT margin added ✓`, description: `${pos.accountName} — liquidation price will update on refresh.` });
+        setAddingMarginKey(null);
+        setMarginAmounts((prev) => { const next = { ...prev }; delete next[posKey]; return next; });
+        void refetchPositions();
+      },
+      onError: (err: any) => {
+        toast({ title: "Add Margin Failed", description: err.message, variant: "destructive" });
+      },
+    }
+  );
+}, [marginAmounts, addMarginMut, refetchPositions, toast]);
+
   const handleCancelOrder = useCallback((order: OpenOrder) => {
     cancelOrderMut.mutate({ data: { accountIds: [order.accountId], orderId: order.orderId } }, {
       onSuccess: () => { toast({ title: `Order cancelled on ${order.accountName}` }); void refetchOrders(); },
@@ -1389,8 +1655,159 @@ export function TradePage() {
     if (pendingOnly.length > 0 && ok > 0) { persistSelection(mergedSelection, { silent: true }); setPendingAdditions([]); }
   };
 
-  const positionsArr = positions as Position[];
   const ordersArr = openOrders as OpenOrder[];
+
+  useEffect(() => {
+  if (!ordersFetched || !positionsFetched) return;
+
+  const pending = watchedSlots.filter((s) => s.status === "pending_fill" && s.orderId);
+  if (pending.length === 0) return;
+  const openOrderIds = new Set(ordersArr.map((o) => o.orderId));
+  const filledThisPass: WatchedSlot[] = [];
+
+  pending.forEach((slot) => {
+    const isCurrentlyOpen = openOrderIds.has(slot.orderId!);
+    if (isCurrentlyOpen) {
+      if (!slot.seenOpen) {
+        setWatchedSlots((prev) => prev.map((s) => (s.id === slot.id ? { ...s, seenOpen: true } : s)));
+      }
+      return;
+    }
+    if (!slot.seenOpen) return;
+
+    const expectedSide = slot.side === "BUY" ? "LONG" : "SHORT";
+    const hasMatchingPosition = positionsArr.some(
+      (p) => p.accountId === slot.accountId && p.symbol === slot.symbol && p.positionSide === expectedSide
+    );
+    if (!hasMatchingPosition) {
+      setWatchedSlots((prev) => prev.filter((s) => s.id !== slot.id));
+      return;
+    }
+    filledThisPass.push(slot);
+  });
+
+  if (filledThisPass.length === 0) return;
+
+  setWatchedSlots((prev) =>
+    prev.map((s) => (filledThisPass.some((f) => f.id === s.id) ? { ...s, status: "placing_tp" } : s))
+  );
+
+  (async () => {
+    for (const slot of filledThisPass) {
+      try {
+        const result = await executeTrade({
+          accountIds: [slot.accountId],
+          order: {
+            symbol: slot.symbol,
+            side: slot.side === "BUY" ? "SELL" : "BUY",
+            orderType: "LIMIT",
+            price: slot.tpPrice,
+            quantity: slot.quantity,
+            reduceOnly: true,
+          },
+        });
+        const tpOrderId = (result as any)?.[0]?.orderId ?? undefined;
+
+        setWatchedSlots((prev) =>
+          prev.map((s) =>
+            s.id === slot.id
+              ? { ...s, status: "watching", tpOrderId, tpSeenOpen: false, orderId: undefined, seenOpen: false }
+              : s
+          )
+        );
+      } catch (err: any) {
+        console.error(`Exit-limit placement failed for filled slot ${slot.id}`, err);
+        toast({
+          title: "Exit order placement failed",
+          description: `${fmt(slot.tpPrice)} for ${getAccountName(slot.accountId)}`,
+          variant: "destructive",
+        });
+        setWatchedSlots((prev) => prev.map((s) => (s.id === slot.id ? { ...s, status: "watching" } : s)));
+      }
+    }
+    void refetchOrders();
+  })();
+}, [ordersArr, positionsArr, watchedSlots, setWatchedSlots, toast, ordersFetched, positionsFetched]);
+
+
+  /* ── Fill detection #2: exit limit fills → re-punch a fresh entry limit ── */
+useEffect(() => {
+  if (!ordersFetched) return;
+
+  const watching = watchedSlots.filter((s) => s.status === "watching" && s.tpOrderId);
+  if (watching.length === 0) return;
+
+  const openOrderIds = new Set(ordersArr.map((o) => o.orderId));
+  const closedThisPass: WatchedSlot[] = [];
+
+  watching.forEach((slot) => {
+    const isCurrentlyOpen = openOrderIds.has(slot.tpOrderId!);
+    if (isCurrentlyOpen) {
+      if (!slot.tpSeenOpen) {
+        setWatchedSlots((prev) => prev.map((s) => (s.id === slot.id ? { ...s, tpSeenOpen: true } : s)));
+      }
+      return;
+    }
+    if (!slot.tpSeenOpen) return; // avoid acting on a stale/racy fetch right after placing it
+    closedThisPass.push(slot);
+  });
+
+  if (closedThisPass.length === 0) return;
+
+  setWatchedSlots((prev) =>
+    prev.map((s) => (closedThisPass.some((f) => f.id === s.id) ? { ...s, status: "repunching" } : s))
+  );
+
+  (async () => {
+    for (const slot of closedThisPass) {
+      try {
+        const result = await executeTrade({
+          accountIds: [slot.accountId],
+          order: {
+            symbol: slot.symbol,
+            side: slot.side,
+            orderType: "LIMIT",
+            quantity: slot.quantity,
+            price: slot.limitPrice,
+          },
+        });
+        const orderId = (result as any)?.[0]?.orderId ?? undefined;
+
+        setWatchedSlots((prev) =>
+          prev.map((s) =>
+            s.id === slot.id
+              ? {
+                  ...s,
+                  status: "pending_fill",
+                  orderId,
+                  seenOpen: false,
+                  tpOrderId: undefined,
+                  tpSeenOpen: false,
+                  repunchCount: s.repunchCount + 1,
+                }
+              : s
+          )
+        );
+
+        toast({
+          title: `♻ Re-punched @ ${fmt(slot.limitPrice)}`,
+          description: `${getAccountName(slot.accountId)} — re-punch #${slot.repunchCount + 1}`,
+        });
+      } catch (err: any) {
+        console.error(`Re-punch failed for slot ${slot.id}`, err);
+        toast({
+          title: "Re-punch failed",
+          description: `${fmt(slot.limitPrice)}: ${err.message}`,
+          variant: "destructive",
+        });
+        setWatchedSlots((prev) =>
+          prev.map((s) => (s.id === slot.id ? { ...s, status: "watching", tpOrderId: undefined, tpSeenOpen: false } : s))
+        );
+      }
+    }
+    void refetchOrders();
+  })();
+}, [ordersArr, watchedSlots, setWatchedSlots, toast, ordersFetched]);
 
   /* ── filtered positions ── */
   const filteredPositions = useMemo(() => {
@@ -1572,108 +1989,236 @@ export function TradePage() {
                 <label className="text-[10px] font-semibold uppercase tracking-widest text-muted-foreground">Leverage</label>
                 <span className="text-xs font-bold" style={{ color: "hsl(var(--primary))" }}>{leverage}×</span>
               </div>
-<div className="flex items-center justify-between gap-3">
-  {/* Leverage Presets */}
-  <div className="flex gap-1 flex-wrap">
-    {LEVERAGE_PRESETS.map((lv) => (
-      <button
-        key={lv}
-        onClick={() => setLeverage(lv)}
-        className="px-1.5 py-0.5 rounded text-[11px] font-semibold transition-all"
-        style={
-          leverage === lv
-            ? {
-                background: "hsl(258 82% 64% / 0.2)",
-                color: "hsl(var(--primary))",
-                border: "1px solid hsl(258 82% 64% / 0.4)",
-              }
-            : {
-                background: "hsl(var(--muted))",
-                color: "hsl(var(--muted-foreground))",
-                border: "1px solid transparent",
-              }
-        }
-      >
-        {lv}×
-      </button>
-    ))}
-  </div>
+              <div className="flex items-center justify-between gap-3">
+                {/* Leverage Presets */}
+                <div className="flex gap-1 flex-wrap">
+                  {LEVERAGE_PRESETS.map((lv) => (
+                    <button
+                      key={lv}
+                      onClick={() => setLeverage(lv)}
+                      className="px-1.5 py-0.5 rounded text-[11px] font-semibold transition-all"
+                      style={
+                        leverage === lv
+                          ? {
+                              background: "hsl(258 82% 64% / 0.2)",
+                              color: "hsl(var(--primary))",
+                              border: "1px solid hsl(258 82% 64% / 0.4)",
+                            }
+                          : {
+                              background: "hsl(var(--muted))",
+                              color: "hsl(var(--muted-foreground))",
+                              border: "1px solid transparent",
+                            }
+                      }
+                    >
+                      {lv}×
+                    </button>
+                  ))}
+                </div>
 
-  {/* Set Button */}
-  <button
-    onClick={handleSetLeverage}
-    disabled={leverageMut.isPending || effectiveAccountIds.length === 0}
-    className="px-4 py-1.5 rounded-xl font-semibold text-xs whitespace-nowrap transition-all disabled:opacity-50"
-    style={{
-      border: "1px solid hsl(258 82% 64% / 0.35)",
-      color: "hsl(var(--primary))",
-      background: "hsl(258 82% 64% / 0.06)",
-    }}
-  >
-    {leverageMut.isPending ? "Setting…" : `Set ${leverage}×`}
-  </button>
-</div>
+                {/* Set Button */}
+                <button
+                  onClick={handleSetLeverage}
+                  disabled={leverageMut.isPending || effectiveAccountIds.length === 0}
+                  className="px-4 py-1.5 rounded-xl font-semibold text-xs whitespace-nowrap transition-all disabled:opacity-50"
+                  style={{
+                    border: "1px solid hsl(258 82% 64% / 0.35)",
+                    color: "hsl(var(--primary))",
+                    background: "hsl(258 82% 64% / 0.06)",
+                  }}
+                >
+                  {leverageMut.isPending ? "Setting…" : `Set ${leverage}×`}
+                </button>
+              </div>
             </div>
 
             {/* Auto-punch toggle */}
             <div className="flex items-center justify-between gap-3">
-  <div className="min-w-0">
-    <div className="flex items-center gap-2">
-      <span className="text-xs font-bold">Auto-punch Limits</span>
+              <div className="min-w-0">
+                <div className="flex items-center gap-2">
+                  <span className="text-xs font-bold">Auto-punch Limits</span>
+                  <button
+                    onClick={() => setShowAutoPunchDrawer(true)}
+                    className="flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-medium transition-all"
+                    style={{
+                      background: "hsl(258 82% 64% / 0.1)",
+                      color: "hsl(var(--primary))",
+                      border: "1px solid hsl(258 82% 64% / 0.25)",
+                    }}
+                  >
+                    <Settings2 className="w-3 h-3" />
+                    Edit
+                  </button>
+                </div>
 
-      <button
-        onClick={() => setShowAutoPunchDrawer(true)}
-        className="flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-medium transition-all"
-        style={{
-          background: "hsl(258 82% 64% / 0.1)",
-          color: "hsl(var(--primary))",
-          border: "1px solid hsl(258 82% 64% / 0.25)",
-        }}
-      >
-        <Settings2 className="w-3 h-3" />
-        Edit
-      </button>
-    </div>
+                {autoPunchEnabled && autoPunchConfig && (
+                  <p className="text-[10px] text-muted-foreground mt-0.5">
+                    {autoPunchConfig.orderCount} orders · {autoPunchConfig.stepSize} pt step ·{" "}
+                    {autoPunchConfig.tpPoints} pt TP
+                  </p>
+                )}
 
-    {autoPunchEnabled && autoPunchConfig && (
-      <p className="text-[10px] text-muted-foreground mt-0.5">
-        {autoPunchConfig.orderCount} orders · {autoPunchConfig.stepSize} pt step ·{" "}
-        {autoPunchConfig.tpPoints} pt TP
-      </p>
-    )}
+                {!autoPunchConfig && (
+                  <p className="text-[10px] text-muted-foreground mt-0.5">
+                    Configure before enabling.
+                  </p>
+                )}
+              </div>
 
-    {!autoPunchConfig && (
-      <p className="text-[10px] text-muted-foreground mt-0.5">
-        Configure before enabling.
-      </p>
-    )}
-  </div>
+              <button
+  onClick={() => {
+    if (!autoPunchConfig && !autoPunchEnabled) {
+      setShowAutoPunchDrawer(true);
+    } else {
+      setAutoPunchEnabled(!autoPunchEnabled);
+    }
+  }}
+                className="relative shrink-0 w-10 h-5 rounded-full transition-colors duration-200"
+                style={{
+                  background: autoPunchEnabled
+                    ? "hsl(258 82% 64%)"
+                    : "hsl(var(--muted))",
+                }}
+              >
+                <span
+                  className="absolute top-0.5 left-0.5 w-4 h-4 rounded-full bg-white transition-transform duration-200 shadow-sm"
+                  style={{
+                    transform: autoPunchEnabled
+                      ? "translateX(20px)"
+                      : "translateX(0)",
+                  }}
+                />
+              </button>
+            </div>
 
-  <button
-    onClick={() => {
-      if (!autoPunchConfig && !autoPunchEnabled) {
-        setShowAutoPunchDrawer(true);
-      } else {
-        setAutoPunchEnabled((v) => !v);
-      }
-    }}
-    className="relative shrink-0 w-10 h-5 rounded-full transition-colors duration-200"
-    style={{
-      background: autoPunchEnabled
-        ? "hsl(258 82% 64%)"
-        : "hsl(var(--muted))",
-    }}
-  >
-    <span
-      className="absolute top-0.5 left-0.5 w-4 h-4 rounded-full bg-white transition-transform duration-200 shadow-sm"
-      style={{
-        transform: autoPunchEnabled
-          ? "translateX(20px)"
-          : "translateX(0)",
-      }}
-    />
-  </button>
-</div>
+            {/* STEP 9: Re-punch Monitor */}
+            {autoPunchEnabled && watchedSlots.length > 0 && (
+              <div
+                className="rounded-xl overflow-hidden"
+                style={{
+                  border: "1px solid hsl(162 88% 42% / 0.3)",
+                  background: "hsl(162 88% 42% / 0.04)",
+                }}
+              >
+                {/* Header row */}
+                <button
+                  onClick={() => setShowMonitor((v) => !v)}
+                  className="w-full flex items-center justify-between px-3 py-2 text-[10px] font-semibold"
+                  style={{ color: "hsl(162 88% 42%)" }}
+                >
+                  <span className="flex items-center gap-1.5">
+                    <RefreshCw className="w-3 h-3" />
+                    Re-punch Monitor
+                    {/* Animated dot if any slot is repunching */}
+                    {watchedSlots.some((s) => s.status === "repunching") && (
+                      <span
+                        className="w-2 h-2 rounded-full animate-pulse"
+                        style={{ background: "hsl(258 82% 64%)" }}
+                      />
+                    )}
+                  </span>
+                  <span className="flex items-center gap-2">
+                    <span
+                      className="px-1.5 py-0.5 rounded-full text-[9px] font-bold"
+                      style={{
+                        background: "hsl(162 88% 42% / 0.15)",
+                        color: "hsl(162 88% 42%)",
+                      }}
+                    >
+                      {watchedSlots.length} slots
+                    </span>
+                    {showMonitor ? (
+                      <ChevronUp className="w-3 h-3" />
+                    ) : (
+                      <ChevronDown className="w-3 h-3" />
+                    )}
+                  </span>
+                </button>
+
+                {/* Slot list */}
+                {showMonitor && (
+                  <div style={{ borderTop: "1px solid hsl(162 88% 42% / 0.15)" }}>
+                    <div className="max-h-48 overflow-y-auto">
+                      {watchedSlots.map((slot) => (
+                        <div
+                          key={slot.id}
+                          className="flex items-center gap-2 px-3 py-1.5 text-[10px]"
+                          style={{
+                            borderBottom: "1px solid hsl(var(--border) / 0.4)",
+                            background:
+                              slot.status === "repunching"
+                                ? "hsl(258 82% 64% / 0.08)"
+                                : "transparent",
+                          }}
+                        >
+                          {/* Status indicator */}
+                          {slot.status === "repunching" ? (
+                            <Loader2
+                              className="w-3 h-3 animate-spin shrink-0"
+                              style={{ color: "hsl(var(--primary))" }}
+                            />
+                          ) : (
+                            <div
+                              className="w-2 h-2 rounded-full shrink-0"
+                              style={{ background: "hsl(162 88% 42%)" }}
+                            />
+                          )}
+
+                          {/* Limit price */}
+                          <span className="font-mono font-bold w-16 shrink-0">
+                            {fmt(slot.limitPrice)}
+                          </span>
+
+                          {/* Account name */}
+                          <span className="text-muted-foreground truncate flex-1">
+                            {getAccountName(slot.accountId)}
+                          </span>
+
+                          {/* Re-punch count */}
+                          <span
+                            className="px-1.5 py-0.5 rounded text-[9px] font-bold shrink-0"
+                            style={
+                              slot.repunchCount > 0
+                                ? {
+                                    background: "hsl(162 88% 42% / 0.15)",
+                                    color: "hsl(162 88% 42%)",
+                                  }
+                                : {
+                                    background: "hsl(var(--muted))",
+                                    color: "hsl(var(--muted-foreground))",
+                                  }
+                            }
+                          >
+                            {slot.status === "repunching"
+                              ? "Punching…"
+                              : slot.repunchCount === 0
+                              ? "Watching"
+                              : `♻ ×${slot.repunchCount}`}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+
+                    {/* Footer */}
+                    <div
+                      className="flex items-center justify-between px-3 py-2"
+                      style={{ borderTop: "1px solid hsl(162 88% 42% / 0.15)" }}
+                    >
+                      <span className="text-[9px] text-muted-foreground">
+                        {watchedSlots.filter((s) => s.repunchCount > 0).length} re-punched so far
+                      </span>
+                      <button
+                        onClick={() => setWatchedSlots([])}
+                        className="text-[10px] font-semibold hover:underline"
+                        style={{ color: "hsl(345 88% 62%)" }}
+                      >
+                        Clear all
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
 
             {/* Accounts panel */}
             <div className="rounded-xl p-3" style={{ border: "1px solid hsl(var(--border))" }}>
@@ -1996,7 +2541,46 @@ export function TradePage() {
                             <td className="px-3 py-2.5 font-mono">{fmt(pos.avgEntryPrice)}</td>
                             <td className="px-3 py-2.5 font-mono">{fmt(pos.markPrice)}</td>
                             <td className={`px-3 py-2.5 font-mono font-semibold ${pnlColor(pos.unrealisedPnl)}`}>{pnlSign(pos.unrealisedPnl)}{fmt(pos.unrealisedPnl)} USDT</td>
-                            <td className="px-3 py-2.5 font-mono text-muted-foreground">{fmt(pos.liquidationPrice)}</td>
+                            <td className="px-3 py-2.5 font-mono text-muted-foreground">
+  {addingMarginKey === posKey ? (
+    <div className="flex items-center gap-1">
+      <input
+        autoFocus
+        type="number"
+        min="0"
+        step="any"
+        value={marginAmounts[posKey] ?? ""}
+        onChange={(e) => setMarginAmounts((prev) => ({ ...prev, [posKey]: e.target.value }))}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") handleAddMargin(pos);
+          if (e.key === "Escape") setAddingMarginKey(null);
+        }}
+        placeholder="+USDT"
+        className="w-16 rounded px-1.5 py-0.5 text-xs font-mono bg-input border border-border focus:outline-none focus:ring-1 focus:ring-ring"
+      />
+      <button
+        onClick={() => handleAddMargin(pos)}
+        disabled={addMarginMut.isPending}
+        className="px-1.5 py-0.5 rounded text-[10px] font-bold disabled:opacity-50"
+        style={{ background: "hsl(162 88% 42%)", color: "#fff" }}
+      >
+        {addMarginMut.isPending ? <Loader2 className="w-3 h-3 animate-spin" /> : "Add"}
+      </button>
+      <button onClick={() => setAddingMarginKey(null)} className="p-0.5 text-muted-foreground hover:text-foreground">
+        <X className="w-3 h-3" />
+      </button>
+    </div>
+  ) : (
+    <div
+      className="flex items-center gap-1 group cursor-pointer"
+      onClick={() => setAddingMarginKey(posKey)}
+      title="Add margin to move liquidation price"
+    >
+      <span>{fmt(pos.liquidationPrice)}</span>
+      <Plus className="w-2.5 h-2.5 opacity-0 group-hover:opacity-60 transition-opacity" style={{ color: "hsl(162 88% 42%)" }} />
+    </div>
+  )}
+</td>
                             <td className="px-3 py-2.5">
                               <div className="flex gap-1.5">
                                 <button onClick={() => setConfirmState({ type: "exit_one", pos })} className="px-2.5 py-1 rounded-md text-[10px] font-bold" style={{ background: "hsl(345 88% 58%)", color: "#fff" }}>Exit</button>
@@ -2092,7 +2676,11 @@ export function TradePage() {
                           </td>
                           <td className="px-3 py-2.5 text-muted-foreground">{order.orderType}</td>
                           <td className="px-3 py-2.5 font-mono">{fmt(order.quantity, 4)}</td>
-                          <td className="px-3 py-2.5 font-mono">{order.price ? fmt(order.price) : "—"}</td>
+                          <td className="px-3 py-2.5 font-mono">
+  {order.orderType === "TAKE_PROFIT_MARKET" || order.orderType === "STOP_MARKET"
+    ? (order.triggerPrice ? fmt(order.triggerPrice) : "—")
+    : (order.price && order.price !== "0" ? fmt(order.price) : "—")}
+</td>
                           <td className="px-3 py-2.5 font-mono text-muted-foreground">{margin != null ? `${fmt(margin)} USDT` : "—"}</td>
                           <td className={`px-3 py-2.5 font-mono ${remaining != null && remaining < 0 ? "text-[hsl(345_88%_58%)]" : "text-muted-foreground"}`}>{remaining != null ? `${fmt(remaining)} USDT` : "—"}</td>
                           <td className="px-3 py-2.5"><span className="px-2 py-0.5 rounded-full text-[10px] font-semibold" style={{ background: "hsl(258 82% 64% / 0.12)", color: "hsl(var(--primary))" }}>{order.status}</span></td>
@@ -2139,22 +2727,30 @@ export function TradePage() {
         </div>
       </div>
 
-      {/* Auto-Punch Drawer */}
-<AutoPunchDrawer
-  open={showAutoPunchDrawer}
-  onClose={() => setShowAutoPunchDrawer(false)}
-  side={side}
-  entryPrice={price}
-  quantity={quantity}
-  selectedAccounts={effectiveSelection}
-  activeAccounts={activeAccounts}
-  balances={balances as any}
-  onConfigSaved={(cfg) => {
-    setLocalAutoPunchConfig(cfg);
-    setAutoPunchEnabled(true);
-  }}
-  savedConfig={autoPunchConfig}
-/>
+      {/* STEP 8: Auto-Punch Drawer with onSlotsCreated */}
+      <AutoPunchDrawer
+        open={showAutoPunchDrawer}
+        onClose={() => setShowAutoPunchDrawer(false)}
+        side={side}
+        entryPrice={price}
+        quantity={quantity}
+        selectedAccounts={effectiveSelection}
+        activeAccounts={activeAccounts}
+        balances={balances as any}
+        onConfigSaved={(cfg) => {
+          setLocalAutoPunchConfig(cfg);
+          setAutoPunchEnabled(true);
+        }}
+        savedConfig={autoPunchConfig}
+        onSlotsCreated={(slots) => {
+          setWatchedSlots((prev) => {
+            const newIds = new Set(slots.map((s) => s.id));
+            return [...prev.filter((s) => !newIds.has(s.id)), ...slots];
+          });
+          setShowMonitor(true);
+          void refetchOrders();
+        }}
+      />
 
       <AddAccountsModal open={showAddModal} onClose={() => setShowAddModal(false)} unselectedAccounts={unselectedAccounts} getBalance={getBalance} onSave={handleModalSave} />
       <ConfirmDialog state={confirmState} onConfirm={handleConfirm} onCancel={() => setConfirmState(null)} />
