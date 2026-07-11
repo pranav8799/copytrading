@@ -21,7 +21,7 @@ import { Layout } from "@/components/layout";
 import { LoginPage } from "@/pages/login";
 import { SelectAccountsPage } from "./pages/select-accounts";
 
-import { RepunchMonitor } from "@/components/repunch-monitor";
+// import { RepunchMonitor } from "@/components/repunch-monitor";
 import { AccountDetailPage } from "./pages/account-detail";
 // import { AutoLimitPage } from "./pages/auto-limit-page";
 // import { AutoTradePuncherPage } from "./pages/Autotradepuncher";
@@ -86,7 +86,7 @@ function App() {
       <TooltipProvider>
         <WouterRouter base={import.meta.env.BASE_URL.replace(/\/$/, "")}>
           <AuthProvider>
-            <RepunchMonitor />
+            {/* <RepunchMonitor /> */}
             <Router />
           </AuthProvider>
         </WouterRouter>

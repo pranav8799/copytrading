@@ -18,6 +18,7 @@ export const settingsTable = mysqlTable("settings", {
   webhooksEnabled: boolean("webhooks_enabled").default(true).notNull(),
   selectedAccounts: json("selected_accounts").$type<SelectedAccount[]>().default([]).notNull(),
   autoPunchConfig: json("auto_punch_config").$type<AutoPunchConfig>().default({ orderCount: 6, stepSize: 50, tpPoints: 100 }).notNull(),
+  watchedSlots: json("watched_slots").default([]).notNull(),
 });
 
 export type Settings = typeof settingsTable.$inferSelect;

@@ -1,7 +1,7 @@
 import "dotenv/config";
 import app from "./app";
 import { logger } from "./lib/logger";
-
+import { startRepunchEngine } from "./jobs/repunchEngine";
 const rawPort = process.env["PORT"];
 
 if (!rawPort) {
@@ -23,4 +23,5 @@ app.listen(port, (err) => {
   }
 
   logger.info({ port }, "Server listening");
+  startRepunchEngine();
 });
