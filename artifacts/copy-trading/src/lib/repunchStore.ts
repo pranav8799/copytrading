@@ -21,6 +21,7 @@ export interface WatchedSlot {
   seenOpen?: boolean;     // has the entry limit been observed resting on the book
   tpOrderId?: string;     // currently-open EXIT limit (while watching)
   tpSeenOpen?: boolean;   // has the exit limit been observed resting on the book
+  stopped?: boolean;       // has this slot been manually stopped (no further repunches)
 }
 
 // ─────────────────────────────────────────────────────────────

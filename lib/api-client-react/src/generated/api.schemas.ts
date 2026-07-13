@@ -256,6 +256,14 @@ export interface InstrumentsData {
   instruments?: InstrumentsDataInstruments;
 }
 
+export type WebhookOrderType = typeof WebhookOrderType[keyof typeof WebhookOrderType];
+
+
+export const WebhookOrderType = {
+  MARKET: 'MARKET',
+  LIMIT: 'LIMIT',
+} as const;
+
 export interface Webhook {
   id: number;
   name: string;
@@ -265,11 +273,22 @@ export interface Webhook {
   defaultSymbol?: string | null;
   /** @nullable */
   defaultLeverage?: number | null;
+  orderType?: WebhookOrderType;
+  /** @nullable */
+  limitOffsetPercent?: number | null;
   isActive: boolean;
   /** @nullable */
   lastTriggered?: string | null;
   createdAt: string;
 }
+
+export type WebhookInputOrderType = typeof WebhookInputOrderType[keyof typeof WebhookInputOrderType];
+
+
+export const WebhookInputOrderType = {
+  MARKET: 'MARKET',
+  LIMIT: 'LIMIT',
+} as const;
 
 export interface WebhookInput {
   name: string;
@@ -278,8 +297,22 @@ export interface WebhookInput {
   defaultSymbol?: string | null;
   /** @nullable */
   defaultLeverage?: number | null;
+  orderType?: WebhookInputOrderType;
+  /** @nullable */
+  limitOffsetPercent?: number | null;
   isActive?: boolean;
 }
+
+/**
+ * @nullable
+ */
+export type WebhookUpdateOrderType = typeof WebhookUpdateOrderType[keyof typeof WebhookUpdateOrderType] | null;
+
+
+export const WebhookUpdateOrderType = {
+  MARKET: 'MARKET',
+  LIMIT: 'LIMIT',
+} as const;
 
 export interface WebhookUpdate {
   /** @nullable */
@@ -289,6 +322,10 @@ export interface WebhookUpdate {
   defaultSymbol?: string | null;
   /** @nullable */
   defaultLeverage?: number | null;
+  /** @nullable */
+  orderType?: WebhookUpdateOrderType;
+  /** @nullable */
+  limitOffsetPercent?: number | null;
   /** @nullable */
   isActive?: boolean | null;
 }

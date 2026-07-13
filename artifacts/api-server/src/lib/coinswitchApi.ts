@@ -179,3 +179,64 @@ export async function callCoinswitch(
     return response.data;
   }
 }
+
+export async function executeOnAllAccountsWithQuantities(
+  accountQuantities: { accountId: number; quantity: number }[],
+  payload: Omit<OrderPayload, "quantity">,
+  firedVia: "MANUAL" | "WEBHOOK" = "MANUAL",
+): Promise<(AccountResult & { quantity?: number })[]> {
+  const accountIds = accountQuantities.map((aq) => aq.accountId);
+  const accounts = await getAccountsByIds(accountIds);
+  const quantityByAccountId = new Map(
+    accountQuantities.map((aq) => [aq.accountId, aq.quantity]),
+  );
+
+  const BATCH_SIZE = 18;
+  const DELAY_MS = 3100;
+
+  const results: (AccountResult & { quantity?: number })[] = [];
+
+  for (let i = 0; i < accounts.length; i += BATCH_SIZE) {
+    const batch = accounts.slice(i, i + BATCH_SIZE);
+    const batchResults = await Promise.allSettled(
+      batch.map((acc) => {
+        const quantity = quantityByAccountId.get(acc.id) ?? 0;
+        return placeOrderForAccount(acc, { ...payload, quantity });
+      }),
+    );
+
+    for (let j = 0; j < batch.length; j++) {
+      const acc = batch[j];
+      const quantity = quantityByAccountId.get(acc.id);
+      const result = batchResults[j];
+      if (result.status === "fulfilled") {
+        results.push({
+          accountId: acc.id,
+          accountName: acc.name,
+          success: true,
+          orderId: result.value.order_id,
+          status: result.value.status,
+          quantity,
+        });
+      } else {
+        logger.error(
+          { error: result.reason, accountId: acc.id },
+          "Order failed for account",
+        );
+        results.push({
+          accountId: acc.id,
+          accountName: acc.name,
+          success: false,
+          error: result.reason?.message || "Unknown error",
+          quantity,
+        });
+      }
+    }
+
+    if (i + BATCH_SIZE < accounts.length) {
+      await new Promise((r) => setTimeout(r, DELAY_MS));
+    }
+  }
+
+  return results;
+}

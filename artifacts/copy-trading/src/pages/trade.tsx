@@ -51,6 +51,8 @@ import {
   Search,
   Filter,
   SlidersHorizontal,
+  Pause,
+  Play,
 } from "lucide-react";
 import { Link } from "wouter";
 
@@ -125,6 +127,11 @@ type ConfirmState =
   | { type: "cancel_all"; count: number }
   | { type: "cancel_selected"; count: number }
   | { type: "cancel_order"; order: OpenOrder }
+  | { type: "repunch_stop_one"; slotId: string; label: string }
+  | { type: "repunch_stop_selected"; count: number }
+  | { type: "repunch_remove_one"; slotId: string; label: string }
+  | { type: "repunch_remove_selected"; count: number }
+  | { type: "repunch_clear_all"; count: number }
   | null;
 
 /* ── STEP 1: WatchedSlot interface ── */
@@ -142,6 +149,7 @@ interface WatchedSlot {
   seenOpen?: boolean;     // has the entry limit been observed resting on the book
   tpOrderId?: string;     // currently-open EXIT limit (while watching)
   tpSeenOpen?: boolean;   // has the exit limit been observed resting on the book
+  stopped?: boolean;      // ← user paused auto re-punch for this slot; any repunch trigger must skip it while true
 }
 /* ── Filter types ── */
 interface PositionFilters {
@@ -155,6 +163,12 @@ interface OrderFilters {
   side: "ALL" | "BUY" | "SELL";
   orderType: "ALL" | "MARKET" | "LIMIT";
   reduceOnly: "ALL" | "YES" | "NO";
+}
+
+interface RepunchFilters {
+  search: string;
+  side: "ALL" | "BUY" | "SELL";
+  status: "ALL" | "pending_fill" | "placing_tp" | "watching" | "repunching" | "stopped";
 }
 
 /* ── helpers ── */
@@ -184,6 +198,28 @@ const calcMargin = (quantity: string | number, price: string | number, lev: numb
   const p = typeof price === "string" ? parseFloat(price) : price;
   if (isNaN(q) || isNaN(p) || !p || !lev) return null;
   return (q * p) / lev;
+};
+
+const slotStatusLabel = (slot: WatchedSlot): string => {
+  if (slot.stopped) return "Stopped";
+  switch (slot.status) {
+    case "pending_fill": return "Pending Fill";
+    case "placing_tp": return "Placing TP";
+    case "watching": return "Watching";
+    case "repunching": return "Re-punching…";
+    default: return slot.status;
+  }
+};
+
+const slotStatusColor = (slot: WatchedSlot): string => {
+  if (slot.stopped) return "hsl(38 92% 45%)";
+  switch (slot.status) {
+    case "repunching": return "hsl(258 82% 64%)";
+    case "placing_tp": return "hsl(258 82% 64%)";
+    case "pending_fill": return "hsl(var(--muted-foreground))";
+    case "watching":
+    default: return "hsl(162 88% 42%)";
+  }
 };
 
 /* ── constants ── */
@@ -1092,7 +1128,12 @@ function ConfirmDialog({ state, onConfirm, onCancel }: { state: ConfirmState; on
     cancel_all: { title: "Cancel All Orders", desc: state.type === "cancel_all" ? `Cancel ${state.count} open order${state.count !== 1 ? "s" : ""}?` : "", label: `Cancel All` },
     cancel_selected: { title: "Cancel Selected Orders", desc: state.type === "cancel_selected" ? `Cancel ${state.count} selected order${state.count !== 1 ? "s" : ""}?` : "", label: `Cancel Selected` },
     cancel_order: { title: "Cancel Order", desc: state.type === "cancel_order" ? `Cancel ${state.order.side} ${state.order.orderType} order on ${state.order.symbol} for ${state.order.accountName}?` : "", label: "Cancel Order" },
-  }[state.type];
+    repunch_stop_one: { title: "Stop Re-punching", desc: state.type === "repunch_stop_one" ? `Stop auto re-punch for ${state.label}? It will stay parked as "Stopped" until you resume it.` : "", label: "Stop", warning: "You can resume this account anytime from the Re-punch Monitor tab." },
+    repunch_stop_selected: { title: "Stop Selected", desc: state.type === "repunch_stop_selected" ? `Stop auto re-punch for ${state.count} selected slot${state.count !== 1 ? "s" : ""}? They'll stay parked as "Stopped" until resumed.` : "", label: "Stop Selected", warning: "You can resume these accounts anytime from the Re-punch Monitor tab." },
+    repunch_remove_one: { title: "Remove From Monitor", desc: state.type === "repunch_remove_one" ? `Remove ${state.label} from the re-punch monitor? This only stops tracking — it will not cancel or close anything on the exchange.` : "", label: "Remove" },
+    repunch_remove_selected: { title: "Remove Selected", desc: state.type === "repunch_remove_selected" ? `Remove ${state.count} selected slot${state.count !== 1 ? "s" : ""} from the re-punch monitor? This only stops tracking — it will not cancel or close anything on the exchange.` : "", label: "Remove Selected" },
+    repunch_clear_all: { title: "Clear Re-punch Monitor", desc: state.type === "repunch_clear_all" ? `Remove all ${state.count} slot${state.count !== 1 ? "s" : ""} from the re-punch monitor? This only stops tracking — it will not cancel or close anything on the exchange.` : "", label: "Clear All" },
+  }[state.type] as { title: string; desc: string; label: string; warning?: string };
 
   return (
     <Dialog open onOpenChange={(o) => !o && onCancel()}>
@@ -1105,7 +1146,7 @@ function ConfirmDialog({ state, onConfirm, onCancel }: { state: ConfirmState; on
         </DialogHeader>
         <p className="text-xs px-3 py-2 rounded-lg"
           style={{ background: "hsl(345 88% 58% / 0.08)", border: "1px solid hsl(345 88% 58% / 0.2)", color: "hsl(345 88% 52%)" }}>
-          This action is irreversible.
+          {cfg.warning ?? "This action is irreversible."}
         </p>
         <DialogFooter className="gap-2">
           <button onClick={onCancel} className="px-4 py-2 rounded-lg text-sm font-medium"
@@ -1143,19 +1184,19 @@ const setAutoPunchEnabled = repunchStore.setEnabled;
   const [isPunching, setIsPunching] = useState(false);
   const [localAutoPunchConfig, setLocalAutoPunchConfig] = useState<AutoPunchConfig | undefined>();
 
-  /* ── STEP 2: re-punch monitor state + refs ── */
+  /* ── STEP 2: re-punch monitor state ── */
 const watchedSlots = useWatchedSlots();
 const setWatchedSlots = useSetWatchedSlots();
-const [showMonitor, setShowMonitor] = useState(false);
 
   /* ── right panel ── */
-  const [rightTab, setRightTab] = useState<"positions" | "orders">("positions");
+  const [rightTab, setRightTab] = useState<"positions" | "orders" | "repunch">("positions");
   const [expandedTpsl, setExpandedTpsl] = useState<string | null>(null);
   const [posTpValues, setPosTpValues] = useState<Record<string, { tp: string; sl: string }>>({});
   const [addingMarginKey, setAddingMarginKey] = useState<string | null>(null);
   const [marginAmounts, setMarginAmounts] = useState<Record<string, string>>({});
   const [selectedPositions, setSelectedPositions] = useState<Set<string>>(new Set());
   const [selectedOrders, setSelectedOrders] = useState<Set<string>>(new Set());
+  const [selectedSlots, setSelectedSlots] = useState<Set<string>>(new Set());
   const [confirmState, setConfirmState] = useState<ConfirmState>(null);
 
   /* ── position filters ── */
@@ -1171,6 +1212,13 @@ const [showMonitor, setShowMonitor] = useState(false);
     side: "ALL",
     orderType: "ALL",
     reduceOnly: "ALL",
+  });
+
+  /* ── re-punch monitor filters ── */
+  const [repunchFilters, setRepunchFilters] = useState<RepunchFilters>({
+    search: "",
+    side: "ALL",
+    status: "ALL",
   });
 
   /* ── multi-order ── */
@@ -1258,55 +1306,6 @@ const [showMonitor, setShowMonitor] = useState(false);
 
   const positionsArr = positions as Position[];
 
-  
-
-  /* ── STEP 3: repunchSlot callback ── */
-  // const repunchSlot = useCallback(async (slot: WatchedSlot) => {
-  //   try {
-  //     await executeTrade({
-  //       accountIds: [slot.accountId],
-  //       order: {
-  //         symbol: slot.symbol,
-  //         side: slot.side,
-  //         orderType: "LIMIT",
-  //         quantity: slot.quantity,
-  //         price: slot.limitPrice,
-  //       },
-  //     });
-  //     tpslMut.mutate({
-  //       data: {
-  //         accountIds: [slot.accountId],
-  //         symbol: slot.symbol,
-  //         tpPrice: slot.tpPrice,
-  //       },
-  //     });
-  //     setWatchedSlots((prev) =>
-  //       prev.map((s) =>
-  //         s.id === slot.id
-  //           ? { ...s, status: "watching", repunchCount: s.repunchCount + 1 }
-  //           : s
-  //       )
-  //     );
-  //     toast({
-  //       title: `♻ Re-punched @ ${fmt(slot.limitPrice)}`,
-  //       description: `${getAccountName(slot.accountId)} — re-punch #${slot.repunchCount + 1}`,
-  //     });
-  //   } catch (err: any) {
-  //     toast({
-  //       title: "Re-punch failed",
-  //       description: `${fmt(slot.limitPrice)}: ${err.message}`,
-  //       variant: "destructive",
-  //     });
-  //     // Reset to watching so next TP hit can retry
-  //     setWatchedSlots((prev) =>
-  //       prev.map((s) => (s.id === slot.id ? { ...s, status: "watching" } : s))
-  //     );
-  //   }
-  // }, [tpslMut, toast, getAccountName]);
-
-  // // Keep ref in sync
-  // useEffect(() => { repunchFnRef.current = repunchSlot; }, [repunchSlot]);
-
   /* ── STEP 5: Modified runAutoPunch to register slots ── */
   const runAutoPunch = useCallback(async (
     tradeSymbol: string,
@@ -1378,7 +1377,7 @@ newSlots.push({
         const newIds = new Set(newSlots.map((s) => s.id));
         return [...prev.filter((s) => !newIds.has(s.id)), ...newSlots];
       });
-      setShowMonitor(true);
+      setRightTab("repunch");
     }
 
     setIsPunching(false);
@@ -1438,88 +1437,40 @@ newSlots.push({
     });
   }, [effectiveAccountIds, symbol, leverage, leverageMut, toast]);
 
-  /* ── STEP 4: clear monitor when auto-punch is turned off ── */
+  /* ── STEP 4 (kept disabled — enable when wiring the live fill-detection
+     effects back in): clear the watch list when auto-punch is switched off.
+  ── */
   // useEffect(() => {
   //   if (!autoPunchEnabled) {
   //     setWatchedSlots([]);
-  //     setShowMonitor(false);
   //     prevPositionsRef.current = [];
   //     positionPnlRef.current.clear();
   //   }
   // }, [autoPunchEnabled]);
 
-  /* ── STEP 4: position-close monitor: detect TP hits and re-punch ── */
-  // const positionsArr = positions as Position[];
+  /* ── Per-account stop/resume + removal for the Re-punch Monitor ──
+     NOTE: whenever the live fill-detection / repunch-trigger effects above
+     are re-enabled, they must skip any slot where `stopped === true` when
+     selecting candidates to repunch (e.g. add `&& !s.stopped` to the
+     candidate filter and to the TP-fill / exit-fill effects).
+  ── */
+  const toggleSlotStopped = useCallback((slotId: string) => {
+    setWatchedSlots((prev) => prev.map((s) => (s.id === slotId ? { ...s, stopped: !s.stopped } : s)));
+  }, [setWatchedSlots]);
 
-  // useEffect(() => {
-  //   // Always keep prevPositions up to date, even when not monitoring
-  //   const prevPositions = prevPositionsRef.current;
+  const setSlotsStopped = useCallback((slotIds: Set<string>, stopped: boolean) => {
+    setWatchedSlots((prev) => prev.map((s) => (slotIds.has(s.id) ? { ...s, stopped } : s)));
+  }, [setWatchedSlots]);
 
-  //   // Update last-known PnL for all currently open positions
-  //   positionsArr.forEach((p) => {
-  //     const key = `${p.accountId}-${p.symbol}-${p.positionSide}`;
-  //     const pnl = typeof p.unrealisedPnl === "string"
-  //       ? parseFloat(p.unrealisedPnl)
-  //       : (p.unrealisedPnl as number);
-  //     if (!isNaN(pnl)) positionPnlRef.current.set(key, pnl);
-  //   });
+  const removeSlot = useCallback((slotId: string) => {
+    setWatchedSlots((prev) => prev.filter((s) => s.id !== slotId));
+    setSelectedSlots((prev) => { if (!prev.has(slotId)) return prev; const next = new Set(prev); next.delete(slotId); return next; });
+  }, [setWatchedSlots]);
 
-  //   if (autoPunchEnabled && watchedSlotsRef.current.length > 0) {
-  //     const currentKeys = new Set(
-  //       positionsArr.map((p) => `${p.accountId}-${p.symbol}-${p.positionSide}`)
-  //     );
-
-  //     for (const prevPos of prevPositions) {
-  //       const key = `${prevPos.accountId}-${prevPos.symbol}-${prevPos.positionSide}`;
-  //       if (currentKeys.has(key)) continue; // still open — skip
-
-  //       // Position just closed
-  //       const lastPnl = positionPnlRef.current.get(key) ?? 0;
-  //       positionPnlRef.current.delete(key);
-
-  //       if (lastPnl <= 0) continue; // SL or breakeven — don't re-punch
-
-  //       // TP hit! Find the closest matching watched slot
-  //       const slotSide: OrderPayloadSide =
-  //         prevPos.positionSide === "LONG" ? "BUY" : "SELL";
-  //       const avgEntry =
-  //         typeof prevPos.avgEntryPrice === "string"
-  //           ? parseFloat(prevPos.avgEntryPrice)
-  //           : (prevPos.avgEntryPrice as number);
-
-  //       const currentSlots = watchedSlotsRef.current;
-  //       const candidates = currentSlots.filter(
-  //         (s) =>
-  //           s.accountId === prevPos.accountId &&
-  //           s.symbol === prevPos.symbol &&
-  //           s.side === slotSide &&
-  //           s.status === "watching"
-  //       );
-
-  //       if (candidates.length === 0) continue;
-
-  //       // Pick slot whose limitPrice is closest to the position's avgEntry
-  //       const best = candidates.reduce((a, b) =>
-  //         Math.abs(a.limitPrice - avgEntry) <= Math.abs(b.limitPrice - avgEntry)
-  //           ? a
-  //           : b
-  //       );
-
-  //       // Optimistically mark as repunching, then fire
-  //       setWatchedSlots((prev) =>
-  //         prev.map((s) => (s.id === best.id ? { ...s, status: "repunching" } : s))
-  //       );
-  //       void repunchFnRef.current?.(best);
-  //     }
-  //   }
-
-  //   prevPositionsRef.current = positionsArr;
-  // }, [positionsArr, autoPunchEnabled]);
-  // NOTE: watchedSlots intentionally NOT in deps — we access it via watchedSlotsRef
-
-
-
-
+  const removeSlots = useCallback((slotIds: Set<string>) => {
+    setWatchedSlots((prev) => prev.filter((s) => !slotIds.has(s.id)));
+    setSelectedSlots(new Set());
+  }, [setWatchedSlots]);
 
   /* ── exit/cancel ── */
   const doExitPosition = useCallback((pos: Position) => {
@@ -1625,7 +1576,12 @@ const handleAddMargin = useCallback((pos: Position) => {
     else if (confirmState.type === "cancel_all") doCancelAll();
     else if (confirmState.type === "cancel_selected") doCancelSelected();
     else if (confirmState.type === "cancel_order") handleCancelOrder(confirmState.order);
-  }, [confirmState, doExitPosition, doExitSelected, doExitAll, doCancelAll, doCancelSelected, handleCancelOrder]);
+    else if (confirmState.type === "repunch_stop_one") setSlotsStopped(new Set([confirmState.slotId]), true);
+    else if (confirmState.type === "repunch_stop_selected") setSlotsStopped(selectedSlots, true);
+    else if (confirmState.type === "repunch_remove_one") removeSlot(confirmState.slotId);
+    else if (confirmState.type === "repunch_remove_selected") removeSlots(selectedSlots);
+    else if (confirmState.type === "repunch_clear_all") setWatchedSlots([]);
+  }, [confirmState, doExitPosition, doExitSelected, doExitAll, doCancelAll, doCancelSelected, handleCancelOrder, setSlotsStopped, removeSlot, removeSlots, selectedSlots, setWatchedSlots]);
 
   const handleModalSave = (additions: SelectedAccount[]) => {
     if (!additions.length) return;
@@ -1656,158 +1612,6 @@ const handleAddMargin = useCallback((pos: Position) => {
   };
 
   const ordersArr = openOrders as OpenOrder[];
-
-//   useEffect(() => {
-//   if (!ordersFetched || !positionsFetched) return;
-
-//   const pending = watchedSlots.filter((s) => s.status === "pending_fill" && s.orderId);
-//   if (pending.length === 0) return;
-//   const openOrderIds = new Set(ordersArr.map((o) => o.orderId));
-//   const filledThisPass: WatchedSlot[] = [];
-
-//   pending.forEach((slot) => {
-//     const isCurrentlyOpen = openOrderIds.has(slot.orderId!);
-//     if (isCurrentlyOpen) {
-//       if (!slot.seenOpen) {
-//         setWatchedSlots((prev) => prev.map((s) => (s.id === slot.id ? { ...s, seenOpen: true } : s)));
-//       }
-//       return;
-//     }
-//     if (!slot.seenOpen) return;
-
-//     const expectedSide = slot.side === "BUY" ? "LONG" : "SHORT";
-//     const hasMatchingPosition = positionsArr.some(
-//       (p) => p.accountId === slot.accountId && p.symbol === slot.symbol && p.positionSide === expectedSide
-//     );
-//     if (!hasMatchingPosition) {
-//       setWatchedSlots((prev) => prev.filter((s) => s.id !== slot.id));
-//       return;
-//     }
-//     filledThisPass.push(slot);
-//   });
-
-//   if (filledThisPass.length === 0) return;
-
-//   setWatchedSlots((prev) =>
-//     prev.map((s) => (filledThisPass.some((f) => f.id === s.id) ? { ...s, status: "placing_tp" } : s))
-//   );
-
-//   (async () => {
-//     for (const slot of filledThisPass) {
-//       try {
-//         const result = await executeTrade({
-//           accountIds: [slot.accountId],
-//           order: {
-//             symbol: slot.symbol,
-//             side: slot.side === "BUY" ? "SELL" : "BUY",
-//             orderType: "LIMIT",
-//             price: slot.tpPrice,
-//             quantity: slot.quantity,
-//             reduceOnly: true,
-//           },
-//         });
-//         const tpOrderId = (result as any)?.[0]?.orderId ?? undefined;
-
-//         setWatchedSlots((prev) =>
-//           prev.map((s) =>
-//             s.id === slot.id
-//               ? { ...s, status: "watching", tpOrderId, tpSeenOpen: false, orderId: undefined, seenOpen: false }
-//               : s
-//           )
-//         );
-//       } catch (err: any) {
-//         console.error(`Exit-limit placement failed for filled slot ${slot.id}`, err);
-//         toast({
-//           title: "Exit order placement failed",
-//           description: `${fmt(slot.tpPrice)} for ${getAccountName(slot.accountId)}`,
-//           variant: "destructive",
-//         });
-//         setWatchedSlots((prev) => prev.map((s) => (s.id === slot.id ? { ...s, status: "watching" } : s)));
-//       }
-//     }
-//     void refetchOrders();
-//   })();
-// }, [ordersArr, positionsArr, watchedSlots, setWatchedSlots, toast, ordersFetched, positionsFetched]);
-
-
-  /* ── Fill detection #2: exit limit fills → re-punch a fresh entry limit ── */
-// useEffect(() => {
-//   if (!ordersFetched) return;
-
-//   const watching = watchedSlots.filter((s) => s.status === "watching" && s.tpOrderId);
-//   if (watching.length === 0) return;
-
-//   const openOrderIds = new Set(ordersArr.map((o) => o.orderId));
-//   const closedThisPass: WatchedSlot[] = [];
-
-//   watching.forEach((slot) => {
-//     const isCurrentlyOpen = openOrderIds.has(slot.tpOrderId!);
-//     if (isCurrentlyOpen) {
-//       if (!slot.tpSeenOpen) {
-//         setWatchedSlots((prev) => prev.map((s) => (s.id === slot.id ? { ...s, tpSeenOpen: true } : s)));
-//       }
-//       return;
-//     }
-//     if (!slot.tpSeenOpen) return; // avoid acting on a stale/racy fetch right after placing it
-//     closedThisPass.push(slot);
-//   });
-
-//   if (closedThisPass.length === 0) return;
-
-//   setWatchedSlots((prev) =>
-//     prev.map((s) => (closedThisPass.some((f) => f.id === s.id) ? { ...s, status: "repunching" } : s))
-//   );
-
-//   (async () => {
-//     for (const slot of closedThisPass) {
-//       try {
-//         const result = await executeTrade({
-//           accountIds: [slot.accountId],
-//           order: {
-//             symbol: slot.symbol,
-//             side: slot.side,
-//             orderType: "LIMIT",
-//             quantity: slot.quantity,
-//             price: slot.limitPrice,
-//           },
-//         });
-//         const orderId = (result as any)?.[0]?.orderId ?? undefined;
-
-//         setWatchedSlots((prev) =>
-//           prev.map((s) =>
-//             s.id === slot.id
-//               ? {
-//                   ...s,
-//                   status: "pending_fill",
-//                   orderId,
-//                   seenOpen: false,
-//                   tpOrderId: undefined,
-//                   tpSeenOpen: false,
-//                   repunchCount: s.repunchCount + 1,
-//                 }
-//               : s
-//           )
-//         );
-
-//         toast({
-//           title: `♻ Re-punched @ ${fmt(slot.limitPrice)}`,
-//           description: `${getAccountName(slot.accountId)} — re-punch #${slot.repunchCount + 1}`,
-//         });
-//       } catch (err: any) {
-//         console.error(`Re-punch failed for slot ${slot.id}`, err);
-//         toast({
-//           title: "Re-punch failed",
-//           description: `${fmt(slot.limitPrice)}: ${err.message}`,
-//           variant: "destructive",
-//         });
-//         setWatchedSlots((prev) =>
-//           prev.map((s) => (s.id === slot.id ? { ...s, status: "watching", tpOrderId: undefined, tpSeenOpen: false } : s))
-//         );
-//       }
-//     }
-//     void refetchOrders();
-//   })();
-// }, [ordersArr, watchedSlots, setWatchedSlots, toast, ordersFetched]);
 
   /* ── filtered positions ── */
   const filteredPositions = useMemo(() => {
@@ -1846,16 +1650,35 @@ const handleAddMargin = useCallback((pos: Position) => {
     });
   }, [ordersArr, ordFilters]);
 
+  /* ── filtered re-punch monitor slots ── */
+  const filteredSlots = useMemo(() => {
+    const q = repunchFilters.search.toLowerCase().trim();
+    return watchedSlots.filter((slot) => {
+      const phone = getMobileNumber(slot.accountId).toLowerCase();
+      const accName = getAccountName(slot.accountId).toLowerCase();
+      if (q && !slot.symbol.toLowerCase().includes(q) && !accName.includes(q) && !phone.includes(q)) return false;
+      if (repunchFilters.side !== "ALL" && slot.side !== repunchFilters.side) return false;
+      if (repunchFilters.status !== "ALL") {
+        if (repunchFilters.status === "stopped") { if (!slot.stopped) return false; }
+        else { if (slot.stopped || slot.status !== repunchFilters.status) return false; }
+      }
+      return true;
+    });
+  }, [watchedSlots, repunchFilters, activeAccounts]);
+
   /* ── active filter counts ── */
   const posActiveFilters = (posFilters.search ? 1 : 0) + (posFilters.side !== "ALL" ? 1 : 0) + (posFilters.pnl !== "ALL" ? 1 : 0);
   const ordActiveFilters = (ordFilters.search ? 1 : 0) + (ordFilters.side !== "ALL" ? 1 : 0) + (ordFilters.orderType !== "ALL" ? 1 : 0) + (ordFilters.reduceOnly !== "ALL" ? 1 : 0);
+  const repunchActiveFilters = (repunchFilters.search ? 1 : 0) + (repunchFilters.side !== "ALL" ? 1 : 0) + (repunchFilters.status !== "ALL" ? 1 : 0);
 
   const clearPosFilters = () => setPosFilters({ search: "", side: "ALL", pnl: "ALL" });
   const clearOrdFilters = () => setOrdFilters({ search: "", side: "ALL", orderType: "ALL", reduceOnly: "ALL" });
+  const clearRepunchFilters = () => setRepunchFilters({ search: "", side: "ALL", status: "ALL" });
 
   /* ── pagination ── */
   const posPagination = usePagination(filteredPositions, 25);
   const ordPagination = usePagination(filteredOrders, 25);
+  const repunchPagination = usePagination(filteredSlots, 25);
 
   /* ── clear stale order selections when the underlying order list changes ── */
   useEffect(() => {
@@ -1872,9 +1695,36 @@ const handleAddMargin = useCallback((pos: Position) => {
     });
   }, [ordersArr]);
 
+  /* ── clear stale slot selections when the watch list changes ── */
+  useEffect(() => {
+    setSelectedSlots((prev) => {
+      if (prev.size === 0) return prev;
+      const validIds = new Set(watchedSlots.map((s) => s.id));
+      let changed = false;
+      const next = new Set<string>();
+      prev.forEach((id) => {
+        if (validIds.has(id)) next.add(id);
+        else changed = true;
+      });
+      return changed ? next : prev;
+    });
+  }, [watchedSlots]);
+
+  /* ── re-punch monitor summary (for the compact left-panel card) ── */
+  const slotsWatching = watchedSlots.filter((s) => !s.stopped && s.status === "watching").length;
+  const slotsRepunched = watchedSlots.filter((s) => s.repunchCount > 0).length;
+  const slotsStoppedCount = watchedSlots.filter((s) => s.stopped).length;
+  const slotsActive = watchedSlots.some((s) => s.status === "repunching");
+
   /* ─────────────────────────────────────────────────────────
      RENDER
   ───────────────────────────────────────────────────────── */
+  const tabs: Array<{ key: "positions" | "orders" | "repunch"; label: string; count: number; filtered: number }> = [
+    { key: "positions", label: "Positions", count: positionsArr.length, filtered: filteredPositions.length },
+    { key: "orders", label: "Open Orders", count: ordersArr.length, filtered: filteredOrders.length },
+    { key: "repunch", label: "Re-punch Monitor", count: watchedSlots.length, filtered: filteredSlots.length },
+  ];
+
   return (
     <div className="flex flex-col h-screen overflow-hidden">
 
@@ -2091,133 +1941,41 @@ const handleAddMargin = useCallback((pos: Position) => {
               </button>
             </div>
 
-            {/* STEP 9: Re-punch Monitor */}
+            {/* Re-punch Monitor — compact summary; full list lives in the "Re-punch Monitor" tab on the right */}
             {autoPunchEnabled && watchedSlots.length > 0 && (
-              <div
-                className="rounded-xl overflow-hidden"
+              <button
+                onClick={() => setRightTab("repunch")}
+                className="w-full text-left rounded-xl overflow-hidden transition-colors"
                 style={{
                   border: "1px solid hsl(162 88% 42% / 0.3)",
                   background: "hsl(162 88% 42% / 0.04)",
                 }}
               >
-                {/* Header row */}
-                <button
-                  onClick={() => setShowMonitor((v) => !v)}
-                  className="w-full flex items-center justify-between px-3 py-2 text-[10px] font-semibold"
-                  style={{ color: "hsl(162 88% 42%)" }}
-                >
-                  <span className="flex items-center gap-1.5">
+                <div className="flex items-center justify-between px-3 py-2">
+                  <span className="flex items-center gap-1.5 text-[10px] font-semibold" style={{ color: "hsl(162 88% 42%)" }}>
                     <RefreshCw className="w-3 h-3" />
                     Re-punch Monitor
-                    {/* Animated dot if any slot is repunching */}
-                    {watchedSlots.some((s) => s.status === "repunching") && (
-                      <span
-                        className="w-2 h-2 rounded-full animate-pulse"
-                        style={{ background: "hsl(258 82% 64%)" }}
-                      />
+                    {slotsActive && (
+                      <span className="w-2 h-2 rounded-full animate-pulse" style={{ background: "hsl(258 82% 64%)" }} />
                     )}
                   </span>
-                  <span className="flex items-center gap-2">
-                    <span
-                      className="px-1.5 py-0.5 rounded-full text-[9px] font-bold"
-                      style={{
-                        background: "hsl(162 88% 42% / 0.15)",
-                        color: "hsl(162 88% 42%)",
-                      }}
-                    >
-                      {watchedSlots.length} slots
-                    </span>
-                    {showMonitor ? (
-                      <ChevronUp className="w-3 h-3" />
-                    ) : (
-                      <ChevronDown className="w-3 h-3" />
-                    )}
+                  <span
+                    className="px-1.5 py-0.5 rounded-full text-[9px] font-bold"
+                    style={{ background: "hsl(162 88% 42% / 0.15)", color: "hsl(162 88% 42%)" }}
+                  >
+                    {watchedSlots.length} slots
                   </span>
-                </button>
-
-                {/* Slot list */}
-                {showMonitor && (
-                  <div style={{ borderTop: "1px solid hsl(162 88% 42% / 0.15)" }}>
-                    <div className="max-h-48 overflow-y-auto">
-                      {watchedSlots.map((slot) => (
-                        <div
-                          key={slot.id}
-                          className="flex items-center gap-2 px-3 py-1.5 text-[10px]"
-                          style={{
-                            borderBottom: "1px solid hsl(var(--border) / 0.4)",
-                            background:
-                              slot.status === "repunching"
-                                ? "hsl(258 82% 64% / 0.08)"
-                                : "transparent",
-                          }}
-                        >
-                          {/* Status indicator */}
-                          {slot.status === "repunching" ? (
-                            <Loader2
-                              className="w-3 h-3 animate-spin shrink-0"
-                              style={{ color: "hsl(var(--primary))" }}
-                            />
-                          ) : (
-                            <div
-                              className="w-2 h-2 rounded-full shrink-0"
-                              style={{ background: "hsl(162 88% 42%)" }}
-                            />
-                          )}
-
-                          {/* Limit price */}
-                          <span className="font-mono font-bold w-16 shrink-0">
-                            {fmt(slot.limitPrice)}
-                          </span>
-
-                          {/* Account name */}
-                          <span className="text-muted-foreground truncate flex-1">
-                            {getAccountName(slot.accountId)}
-                          </span>
-
-                          {/* Re-punch count */}
-                          <span
-                            className="px-1.5 py-0.5 rounded text-[9px] font-bold shrink-0"
-                            style={
-                              slot.repunchCount > 0
-                                ? {
-                                    background: "hsl(162 88% 42% / 0.15)",
-                                    color: "hsl(162 88% 42%)",
-                                  }
-                                : {
-                                    background: "hsl(var(--muted))",
-                                    color: "hsl(var(--muted-foreground))",
-                                  }
-                            }
-                          >
-                            {slot.status === "repunching"
-                              ? "Punching…"
-                              : slot.repunchCount === 0
-                              ? "Watching"
-                              : `♻ ×${slot.repunchCount}`}
-                          </span>
-                        </div>
-                      ))}
-                    </div>
-
-                    {/* Footer */}
-                    <div
-                      className="flex items-center justify-between px-3 py-2"
-                      style={{ borderTop: "1px solid hsl(162 88% 42% / 0.15)" }}
-                    >
-                      <span className="text-[9px] text-muted-foreground">
-                        {watchedSlots.filter((s) => s.repunchCount > 0).length} re-punched so far
-                      </span>
-                      <button
-                        onClick={() => setWatchedSlots([])}
-                        className="text-[10px] font-semibold hover:underline"
-                        style={{ color: "hsl(345 88% 62%)" }}
-                      >
-                        Clear all
-                      </button>
-                    </div>
-                  </div>
-                )}
-              </div>
+                </div>
+                <div className="flex items-center justify-between px-3 pb-2.5 gap-2" style={{ borderTop: "1px solid hsl(162 88% 42% / 0.15)" }}>
+                  <span className="text-[9px] text-muted-foreground pt-1.5">
+                    {slotsWatching} watching · {slotsRepunched} re-punched
+                    {slotsStoppedCount > 0 && ` · ${slotsStoppedCount} stopped`}
+                  </span>
+                  <span className="shrink-0 text-[10px] font-bold mt-1.5" style={{ color: "hsl(162 88% 42%)" }}>
+                    View all →
+                  </span>
+                </div>
+              </button>
             )}
 
             {/* Accounts panel */}
@@ -2334,18 +2092,17 @@ const handleAddMargin = useCallback((pos: Position) => {
         <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
 
           {/* Tab bar + action buttons */}
-          <div className="flex items-center justify-between px-4 py-2 shrink-0" style={{ borderBottom: "1px solid hsl(var(--border))" }}>
-            <div className="flex gap-1">
-              {(["positions", "orders"] as const).map((tab) => {
-                const count = tab === "positions" ? positionsArr.length : ordersArr.length;
-                const filtered = tab === "positions" ? filteredPositions.length : filteredOrders.length;
-                const isActive = rightTab === tab;
-                const hasFilter = tab === "positions" ? posActiveFilters > 0 : ordActiveFilters > 0;
+          <div className="flex items-center justify-between px-4 py-2 shrink-0 flex-wrap gap-2" style={{ borderBottom: "1px solid hsl(var(--border))" }}>
+            <div className="flex gap-1 flex-wrap">
+              {tabs.map(({ key, label, count, filtered }) => {
+                const isActive = rightTab === key;
+                const hasFilter = key === "positions" ? posActiveFilters > 0 : key === "orders" ? ordActiveFilters > 0 : repunchActiveFilters > 0;
                 return (
-                  <button key={tab} onClick={() => setRightTab(tab)} className="px-4 py-1.5 rounded-lg text-sm font-semibold transition-all capitalize"
+                  <button key={key} onClick={() => setRightTab(key)} className="px-4 py-1.5 rounded-lg text-sm font-semibold transition-all flex items-center gap-1.5"
                     style={isActive ? { background: "hsl(258 82% 64% / 0.15)", color: "hsl(var(--primary))" } : { color: "hsl(var(--muted-foreground))" }}>
-                    {tab === "positions" ? "Positions" : "Open Orders"}
-                    <span className="ml-2 text-xs px-1.5 py-0.5 rounded-full"
+                    {key === "repunch" && <RefreshCw className="w-3.5 h-3.5" />}
+                    {label}
+                    <span className="text-xs px-1.5 py-0.5 rounded-full"
                       style={{ background: isActive ? "hsl(258 82% 64% / 0.2)" : "hsl(var(--muted))", color: isActive ? "hsl(var(--primary))" : "hsl(var(--muted-foreground))" }}>
                       {hasFilter ? `${filtered}/${count}` : count}
                     </span>
@@ -2354,7 +2111,7 @@ const handleAddMargin = useCallback((pos: Position) => {
               })}
             </div>
             <div className="flex items-center gap-2">
-              {rightTab === "positions" ? (
+              {rightTab === "positions" && (
                 <>
                   {selectedPositions.size > 0 && (
                     <button onClick={() => setConfirmState({ type: "exit_selected", count: selectedPositions.size })}
@@ -2368,7 +2125,8 @@ const handleAddMargin = useCallback((pos: Position) => {
                     Exit All ({positionsArr.length})
                   </button>
                 </>
-              ) : (
+              )}
+              {rightTab === "orders" && (
                 <>
                   {selectedOrders.size > 0 && (
                     <button onClick={() => setConfirmState({ type: "cancel_selected", count: selectedOrders.size })}
@@ -2380,6 +2138,33 @@ const handleAddMargin = useCallback((pos: Position) => {
                   <button onClick={() => setConfirmState({ type: "cancel_all", count: ordersArr.length })} disabled={ordersArr.length === 0}
                     className="px-3 py-1.5 rounded-lg text-xs font-bold disabled:opacity-40" style={{ background: "hsl(345 88% 58%)", color: "#fff" }}>
                     Cancel All ({ordersArr.length})
+                  </button>
+                </>
+              )}
+              {rightTab === "repunch" && (
+                <>
+                  {selectedSlots.size > 0 && (
+                    <>
+                      <button onClick={() => setConfirmState({ type: "repunch_stop_selected", count: selectedSlots.size })}
+                        className="flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs font-bold"
+                        style={{ background: "hsl(38 92% 50% / 0.15)", color: "hsl(38 92% 38%)", border: "1px solid hsl(38 92% 50% / 0.3)" }}>
+                        <Pause className="w-3 h-3" /> Stop Selected ({selectedSlots.size})
+                      </button>
+                      <button onClick={() => setSlotsStopped(selectedSlots, false)}
+                        className="flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs font-bold"
+                        style={{ background: "hsl(162 88% 42% / 0.12)", color: "hsl(162 88% 42%)", border: "1px solid hsl(162 88% 42% / 0.3)" }}>
+                        <Play className="w-3 h-3" /> Resume Selected
+                      </button>
+                      <button onClick={() => setConfirmState({ type: "repunch_remove_selected", count: selectedSlots.size })}
+                        className="px-3 py-1.5 rounded-lg text-xs font-bold"
+                        style={{ background: "hsl(345 88% 58% / 0.15)", color: "hsl(345 88% 62%)", border: "1px solid hsl(345 88% 58% / 0.3)" }}>
+                        Remove ({selectedSlots.size})
+                      </button>
+                    </>
+                  )}
+                  <button onClick={() => setConfirmState({ type: "repunch_clear_all", count: watchedSlots.length })} disabled={watchedSlots.length === 0}
+                    className="px-3 py-1.5 rounded-lg text-xs font-bold disabled:opacity-40" style={{ background: "hsl(345 88% 58%)", color: "#fff" }}>
+                    Clear All ({watchedSlots.length})
                   </button>
                 </>
               )}
@@ -2473,6 +2258,48 @@ const handleAddMargin = useCallback((pos: Position) => {
                     ]}
                     onChange={(v) => setOrdFilters((f) => ({ ...f, reduceOnly: v as OrderFilters["reduceOnly"] }))}
                     activeColor="hsl(38 92% 40%)"
+                  />
+                </>
+              }
+            />
+          )}
+
+          {/* ── Re-punch Monitor toolbar ── */}
+          {rightTab === "repunch" && (
+            <TableToolbar
+              searchValue={repunchFilters.search}
+              onSearchChange={(v) => setRepunchFilters((f) => ({ ...f, search: v }))}
+              searchPlaceholder="Search account, phone or symbol…"
+              activeFilterCount={repunchActiveFilters}
+              onClearFilters={clearRepunchFilters}
+              resultCount={filteredSlots.length}
+              totalCount={watchedSlots.length}
+              filterSlot={
+                <>
+                  <FilterChip
+                    label="Side"
+                    value={repunchFilters.side}
+                    options={[
+                      { value: "ALL", label: "All Sides" },
+                      { value: "BUY", label: "▲ Buy" },
+                      { value: "SELL", label: "▼ Sell" },
+                    ]}
+                    onChange={(v) => setRepunchFilters((f) => ({ ...f, side: v as RepunchFilters["side"] }))}
+                    activeColor="hsl(258 82% 60%)"
+                  />
+                  <FilterChip
+                    label="Status"
+                    value={repunchFilters.status}
+                    options={[
+                      { value: "ALL", label: "All Statuses" },
+                      { value: "pending_fill", label: "Pending Fill" },
+                      { value: "placing_tp", label: "Placing TP" },
+                      { value: "watching", label: "Watching" },
+                      { value: "repunching", label: "Re-punching" },
+                      { value: "stopped", label: "Stopped" },
+                    ]}
+                    onChange={(v) => setRepunchFilters((f) => ({ ...f, status: v as RepunchFilters["status"] }))}
+                    activeColor="hsl(162 88% 42%)"
                   />
                 </>
               }
@@ -2697,6 +2524,115 @@ const handleAddMargin = useCallback((pos: Position) => {
                 </tbody>
               </table>
             )}
+
+            {/* RE-PUNCH MONITOR */}
+            {rightTab === "repunch" && (
+              <table className="w-full text-xs border-collapse">
+                <thead>
+                  <tr style={{ background: "hsl(var(--muted))", borderBottom: "1px solid hsl(var(--border))" }}>
+                    <th className="px-3 py-2 text-left font-semibold uppercase tracking-wider text-muted-foreground w-6">
+                      <Checkbox
+                        checked={selectedSlots.size === filteredSlots.length && filteredSlots.length > 0}
+                        onCheckedChange={(v) => {
+                          if (v) setSelectedSlots(new Set(filteredSlots.map((s) => s.id)));
+                          else setSelectedSlots(new Set());
+                        }}
+                      />
+                    </th>
+                    {["Account", "Phone", "Symbol", "Side", "Limit Price", "TP Price", "Qty", "Status", "Re-punches", "Actions"].map((h) => (
+                      <th key={h} className="px-3 py-2 text-left font-semibold uppercase tracking-wider text-muted-foreground">{h}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {filteredSlots.length === 0 ? (
+                    <tr>
+                      <td colSpan={10} className="text-center py-16 text-muted-foreground">
+                        {watchedSlots.length === 0 ? (
+                          <div className="flex flex-col items-center gap-2">
+                            <RefreshCw className="w-6 h-6 opacity-30" />
+                            <span>No accounts are being watched for re-punch yet.</span>
+                            <span className="text-[11px] opacity-70">Enable Auto-punch and take a trade to start monitoring.</span>
+                          </div>
+                        ) : (
+                          <div className="flex flex-col items-center gap-2">
+                            <Filter className="w-6 h-6 opacity-30" />
+                            <span>No slots match your filters</span>
+                            <button onClick={clearRepunchFilters} className="text-xs font-semibold underline underline-offset-2"
+                              style={{ color: "hsl(var(--primary))" }}>Clear filters</button>
+                          </div>
+                        )}
+                      </td>
+                    </tr>
+                  ) : (
+                    repunchPagination.paged.map((slot, idx) => {
+                      const isSlotSelected = selectedSlots.has(slot.id);
+                      return (
+                        <tr key={slot.id} style={{ borderBottom: "1px solid hsl(var(--border))", background: isSlotSelected ? "hsl(258 82% 64% / 0.06)" : idx % 2 === 0 ? "transparent" : "hsl(var(--muted) / 0.3)" }}>
+                          <td className="px-3 py-2.5">
+                            <Checkbox checked={isSlotSelected} onCheckedChange={(v) => {
+                              setSelectedSlots((prev) => { const next = new Set(prev); if (v) next.add(slot.id); else next.delete(slot.id); return next; });
+                            }} />
+                          </td>
+                          <td className="px-3 py-2.5 font-medium max-w-[100px] truncate">{getAccountName(slot.accountId)}</td>
+                          <td className="px-3 py-2.5 font-mono text-muted-foreground">{getMobileNumber(slot.accountId)}</td>
+                          <td className="px-3 py-2.5 font-bold font-mono">{slot.symbol}</td>
+                          <td className="px-3 py-2.5">
+                            <span className="px-2 py-0.5 rounded-full text-[10px] font-bold"
+                              style={slot.side === "BUY" ? { background: "hsl(162 88% 42% / 0.15)", color: "hsl(162 88% 46%)" } : { background: "hsl(345 88% 58% / 0.15)", color: "hsl(345 88% 62%)" }}>
+                              {slot.side}
+                            </span>
+                          </td>
+                          <td className="px-3 py-2.5 font-mono">{fmt(slot.limitPrice)}</td>
+                          <td className="px-3 py-2.5 font-mono text-muted-foreground">{fmt(slot.tpPrice)}</td>
+                          <td className="px-3 py-2.5 font-mono">{fmt(slot.quantity, 4)}</td>
+                          <td className="px-3 py-2.5">
+                            <span className="flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[10px] font-bold w-fit"
+                              style={{ background: `${slotStatusColor(slot)} / 0.15)`.replace(")", "").replace("hsl(", "hsl("), color: slotStatusColor(slot) }}>
+                              {slot.status === "repunching" && !slot.stopped && <Loader2 className="w-2.5 h-2.5 animate-spin" />}
+                              {slotStatusLabel(slot)}
+                            </span>
+                          </td>
+                          <td className="px-3 py-2.5">
+                            <span className="px-1.5 py-0.5 rounded text-[10px] font-bold"
+                              style={slot.repunchCount > 0
+                                ? { background: "hsl(162 88% 42% / 0.15)", color: "hsl(162 88% 42%)" }
+                                : { background: "hsl(var(--muted))", color: "hsl(var(--muted-foreground))" }}>
+                              {slot.repunchCount === 0 ? "—" : `♻ ×${slot.repunchCount}`}
+                            </span>
+                          </td>
+                          <td className="px-3 py-2.5">
+                            <div className="flex gap-1.5">
+                              <button
+                                onClick={() => {
+                                  if (slot.stopped) toggleSlotStopped(slot.id);
+                                  else setConfirmState({ type: "repunch_stop_one", slotId: slot.id, label: `${slot.symbol} on ${getAccountName(slot.accountId)}` });
+                                }}
+                                title={slot.stopped ? "Resume auto re-punch for this account" : "Stop auto re-punch for this account"}
+                                className="flex items-center gap-1 px-2.5 py-1 rounded-md text-[10px] font-bold transition-all"
+                                style={slot.stopped
+                                  ? { background: "hsl(162 88% 42% / 0.12)", color: "hsl(162 88% 42%)", border: "1px solid hsl(162 88% 42% / 0.3)" }
+                                  : { background: "hsl(38 92% 50% / 0.12)", color: "hsl(38 92% 38%)", border: "1px solid hsl(38 92% 50% / 0.3)" }}
+                              >
+                                {slot.stopped ? <><Play className="w-2.5 h-2.5" /> Resume</> : <><Pause className="w-2.5 h-2.5" /> Stop</>}
+                              </button>
+                              <button
+                                onClick={() => setConfirmState({ type: "repunch_remove_one", slotId: slot.id, label: `${slot.symbol} on ${getAccountName(slot.accountId)}` })}
+                                title="Remove from monitor"
+                                className="px-2 py-1 rounded-md text-[10px] font-bold"
+                                style={{ border: "1px solid hsl(var(--border))", color: "hsl(var(--muted-foreground))" }}
+                              >
+                                <Trash2 className="w-3 h-3" />
+                              </button>
+                            </div>
+                          </td>
+                        </tr>
+                      );
+                    })
+                  )}
+                </tbody>
+              </table>
+            )}
           </div>
 
           {/* ── Pagination bars ── */}
@@ -2724,6 +2660,18 @@ const handleAddMargin = useCallback((pos: Position) => {
               onPageSize={ordPagination.setPageSize}
             />
           )}
+          {rightTab === "repunch" && filteredSlots.length > 0 && (
+            <PaginationBar
+              page={repunchPagination.page}
+              pageSize={repunchPagination.pageSize}
+              totalPages={repunchPagination.totalPages}
+              totalItems={repunchPagination.totalItems}
+              hasPrev={repunchPagination.hasPrev}
+              hasNext={repunchPagination.hasNext}
+              onPage={repunchPagination.setPage}
+              onPageSize={repunchPagination.setPageSize}
+            />
+          )}
         </div>
       </div>
 
@@ -2747,7 +2695,7 @@ const handleAddMargin = useCallback((pos: Position) => {
             const newIds = new Set(slots.map((s) => s.id));
             return [...prev.filter((s) => !newIds.has(s.id)), ...slots];
           });
-          setShowMonitor(true);
+          setRightTab("repunch");
           void refetchOrders();
         }}
       />
@@ -2757,8 +2705,6 @@ const handleAddMargin = useCallback((pos: Position) => {
     </div>
   );
 }
-
-
 
 
 

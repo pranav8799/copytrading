@@ -5,6 +5,7 @@
  * Copy Trading Admin Panel API
  * OpenAPI spec version: 0.1.0
  */
+import type { WebhookInputOrderType } from './webhookInputOrderType';
 
 export interface WebhookInput {
   name: string;
@@ -13,5 +14,8 @@ export interface WebhookInput {
   defaultSymbol?: string | null;
   /** @nullable */
   defaultLeverage?: number | null;
+  orderType?: WebhookInputOrderType;
+  /** @nullable */
+  limitOffsetPercent?: number | null;
   isActive?: boolean;
 }

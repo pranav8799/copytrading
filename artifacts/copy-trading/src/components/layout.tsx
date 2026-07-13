@@ -106,7 +106,7 @@ export function Layout({ children }: { children: React.ReactNode }) {
             }
             onClick={() => {
               localStorage.removeItem("ct_token");
-              window.location.href = "/login";
+              window.location.href = "/copytrading/login";
             }}
           >
             <LogOut className="w-4 h-4" />

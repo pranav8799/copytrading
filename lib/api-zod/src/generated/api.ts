@@ -220,7 +220,6 @@ export const GetOpenOrdersResponseItem = zod.object({
   "quantity": zod.string(),
   "execQuantity": zod.string().optional(),
   "price": zod.string().optional(),
-  "triggerPrice": zod.string().nullish(),
   "avgExecutionPrice": zod.string().nullish(),
   "executionFee": zod.string().nullish(),
   "realisedPnl": zod.string().nullish(),
@@ -252,7 +251,6 @@ export const GetClosedOrdersResponseItem = zod.object({
   "quantity": zod.string(),
   "execQuantity": zod.string().optional(),
   "price": zod.string().optional(),
-  "triggerPrice": zod.string().nullish(),
   "avgExecutionPrice": zod.string().nullish(),
   "executionFee": zod.string().nullish(),
   "realisedPnl": zod.string().nullish(),
@@ -426,6 +424,8 @@ export const ListWebhooksResponseItem = zod.object({
   "targetAccounts": zod.array(zod.number()).optional(),
   "defaultSymbol": zod.string().nullish(),
   "defaultLeverage": zod.number().nullish(),
+  "orderType": zod.enum(['MARKET', 'LIMIT']).optional(),
+  "limitOffsetPercent": zod.number().nullish(),
   "isActive": zod.boolean(),
   "lastTriggered": zod.string().nullish(),
   "createdAt": zod.string()
@@ -441,6 +441,8 @@ export const CreateWebhookBody = zod.object({
   "targetAccounts": zod.array(zod.number()),
   "defaultSymbol": zod.string().nullish(),
   "defaultLeverage": zod.number().nullish(),
+  "orderType": zod.enum(['MARKET', 'LIMIT']).optional(),
+  "limitOffsetPercent": zod.number().nullish(),
   "isActive": zod.boolean().optional()
 })
 
@@ -457,6 +459,8 @@ export const UpdateWebhookBody = zod.object({
   "targetAccounts": zod.array(zod.number()).optional(),
   "defaultSymbol": zod.string().nullish(),
   "defaultLeverage": zod.number().nullish(),
+  "orderType": zod.enum(['MARKET', 'LIMIT']).nullish(),
+  "limitOffsetPercent": zod.number().nullish(),
   "isActive": zod.boolean().nullish()
 })
 
@@ -467,6 +471,8 @@ export const UpdateWebhookResponse = zod.object({
   "targetAccounts": zod.array(zod.number()).optional(),
   "defaultSymbol": zod.string().nullish(),
   "defaultLeverage": zod.number().nullish(),
+  "orderType": zod.enum(['MARKET', 'LIMIT']).optional(),
+  "limitOffsetPercent": zod.number().nullish(),
   "isActive": zod.boolean(),
   "lastTriggered": zod.string().nullish(),
   "createdAt": zod.string()

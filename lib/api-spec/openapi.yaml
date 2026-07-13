@@ -1146,6 +1146,11 @@ components:
           type: ["string", "null"]
         defaultLeverage:
           type: ["integer", "null"]
+        orderType:
+          type: string
+          enum: ["MARKET", "LIMIT"]
+        limitOffsetPercent:
+          type: ["number", "null"]
         isActive:
           type: boolean
         lastTriggered:
@@ -1167,6 +1172,11 @@ components:
           type: ["string", "null"]
         defaultLeverage:
           type: ["integer", "null"]
+        orderType:
+          type: string
+          enum: ["MARKET", "LIMIT"]
+        limitOffsetPercent:
+          type: ["number", "null"]
         isActive:
           type: boolean
 
@@ -1183,6 +1193,11 @@ components:
           type: ["string", "null"]
         defaultLeverage:
           type: ["integer", "null"]
+        orderType:
+          type: ["string", "null"]
+          enum: ["MARKET", "LIMIT"]
+        limitOffsetPercent:
+          type: ["number", "null"]
         isActive:
           type: ["boolean", "null"]
 
