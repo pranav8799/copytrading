@@ -1175,7 +1175,7 @@ export function TradePage() {
   const [leverage, setLeverage] = useState(10);
   const [tpPrice, setTpPrice] = useState("");
   const [slPrice, setSlPrice] = useState("");
-  const [showTpsl, setShowTpsl] = useState(false);
+  // const [showTpsl, setShowTpsl] = useState(false);
 
   /* ── auto-punch ── */
   const autoPunchEnabled = useAutoPunchEnabled();
@@ -1294,6 +1294,11 @@ const setWatchedSlots = useSetWatchedSlots();
     return null;
   };
 
+  const getMarkPrice = (accountId: number, symbol: string): string | number | null => {
+  const pos = positionsArr.find((p) => p.accountId === accountId && p.symbol === symbol);
+  return pos ? pos.markPrice : null;
+};
+
   const persistSelection = useCallback((selection: SelectedAccount[], opts?: { silent?: boolean }) => {
     updateSettingsMut.mutate({ data: { selectedAccounts: selection } }, {
       onSuccess: () => {
@@ -1308,88 +1313,111 @@ const setWatchedSlots = useSetWatchedSlots();
 
   /* ── STEP 5: Modified runAutoPunch to register slots ── */
   const runAutoPunch = useCallback(async (
-    tradeSymbol: string,
-    tradeSide: OrderPayloadSide,
-    tradeEntryPrice: number,
-    baseQty: number,
-    accounts: SelectedAccount[],
-    cfg: AutoPunchConfig
-  ) => {
-    setIsPunching(true);
-    toast({
-      title: `⚡ Auto-punching ${cfg.orderCount} limit orders…`,
-      description: `${cfg.stepSize}-pt steps, ${cfg.tpPoints}-pt TP each`,
-    });
+  tradeSymbol: string,
+  tradeSide: OrderPayloadSide,
+  tradeEntryPrice: number,
+  baseQty: number,
+  accounts: SelectedAccount[],
+  cfg: AutoPunchConfig,
+  entryOrderResults?: { accountId: number; multiplier: number; orderId?: string; filled: boolean }[] // ← NEW
+) => {
+  setIsPunching(true);
+  toast({
+    title: `⚡ Auto-punching ${cfg.orderCount} limit orders…`,
+    description: `${cfg.stepSize}-pt steps, ${cfg.tpPoints}-pt TP each`,
+  });
 
-    let totalOk = 0, totalFailed = 0;
-    const newSlots: WatchedSlot[] = [];
+  let totalOk = 0, totalFailed = 0;
+  const newSlots: WatchedSlot[] = [];
 
-    for (let n = 1; n <= cfg.orderCount; n++) {
-      const limitPrice = tradeSide === "BUY"
-        ? tradeEntryPrice - cfg.stepSize * n
-        : tradeEntryPrice + cfg.stepSize * n;
-      const tp = tradeSide === "BUY"
-        ? limitPrice + cfg.tpPoints
-        : limitPrice - cfg.tpPoints;
+  // ── NEW: register the terminal ("entry") order itself as leg 0 so it
+  // gets a TP placed and is monitored/repunched just like the auto-punch legs ──
+  if (entryOrderResults?.length) {
+    const tp0 = tradeSide === "BUY" ? tradeEntryPrice + cfg.tpPoints : tradeEntryPrice - cfg.tpPoints;
+    for (const { accountId, multiplier, orderId, filled } of entryOrderResults) {
+      newSlots.push({
+        id: `${accountId}-${tradeSymbol}-${tradeSide}-${tradeEntryPrice}-entry`,
+        accountId,
+        symbol: tradeSymbol,
+        side: tradeSide,
+        limitPrice: tradeEntryPrice,
+        tpPrice: tp0,
+        quantity: baseQty * multiplier,
+        repunchCount: 0,
+        // MARKET orders fill immediately → skip straight to placing the TP.
+        // LIMIT orders sit on the book like any auto-punch leg → wait for fill.
+        status: filled ? "placing_tp" : "pending_fill",
+        orderId,
+        seenOpen: filled,
+      });
+    }
+  }
 
-const results = await Promise.allSettled(
-        accounts.map(({ accountId, multiplier }) =>
-          executeTrade({
-            accountIds: [accountId],
-            order: {
-              symbol: tradeSymbol,
-              side: tradeSide,
-              orderType: "LIMIT",
-              quantity: baseQty * multiplier,
-              price: limitPrice,
-            },
-          })
-        )
-      );
+  for (let n = 1; n <= cfg.orderCount; n++) {
+    const limitPrice = tradeSide === "BUY"
+      ? tradeEntryPrice - cfg.stepSize * n
+      : tradeEntryPrice + cfg.stepSize * n;
+    const tp = tradeSide === "BUY"
+      ? limitPrice + cfg.tpPoints
+      : limitPrice - cfg.tpPoints;
 
-      results.forEach((result, i) => {
-        const { accountId, multiplier } = accounts[i];
-        if (result.status === "fulfilled") {
-          totalOk++;
-          const orderId = (result.value as any)?.[0]?.orderId ?? undefined;
-newSlots.push({
-            id: `${accountId}-${tradeSymbol}-${tradeSide}-${limitPrice}`,
-            accountId,
+    const results = await Promise.allSettled(
+      accounts.map(({ accountId, multiplier }) =>
+        executeTrade({
+          accountIds: [accountId],
+          order: {
             symbol: tradeSymbol,
             side: tradeSide,
-            limitPrice,
-            tpPrice: tp,
+            orderType: "LIMIT",
             quantity: baseQty * multiplier,
-            repunchCount: 0,
-            status: "pending_fill",
-            orderId,
-            seenOpen: false,
-          });
-        } else {
-          totalFailed++;
-        }
-      });
-    }
+            price: limitPrice,
+          },
+        })
+      )
+    );
 
-    // Register all successfully placed slots
-    if (newSlots.length > 0) {
-      setWatchedSlots((prev) => {
-        const newIds = new Set(newSlots.map((s) => s.id));
-        return [...prev.filter((s) => !newIds.has(s.id)), ...newSlots];
-      });
-      setRightTab("repunch");
-    }
-
-    setIsPunching(false);
-    toast({
-      title: totalFailed === 0
-        ? `⚡ Auto-punch complete — ${totalOk} orders ✓`
-        : `⚡ Done — ${totalOk} ok, ${totalFailed} failed`,
-      variant: totalFailed > 0 ? "destructive" : "default",
+    results.forEach((result, i) => {
+      const { accountId, multiplier } = accounts[i];
+      if (result.status === "fulfilled") {
+        totalOk++;
+        const orderId = (result.value as any)?.[0]?.orderId ?? undefined;
+        newSlots.push({
+          id: `${accountId}-${tradeSymbol}-${tradeSide}-${limitPrice}`,
+          accountId,
+          symbol: tradeSymbol,
+          side: tradeSide,
+          limitPrice,
+          tpPrice: tp,
+          quantity: baseQty * multiplier,
+          repunchCount: 0,
+          status: "pending_fill",
+          orderId,
+          seenOpen: false,
+        });
+      } else {
+        totalFailed++;
+      }
     });
+  }
 
-    void refetchOrders();
-  }, [toast, refetchOrders]);
+  if (newSlots.length > 0) {
+    setWatchedSlots((prev) => {
+      const newIds = new Set(newSlots.map((s) => s.id));
+      return [...prev.filter((s) => !newIds.has(s.id)), ...newSlots];
+    });
+    setRightTab("repunch");
+  }
+
+  setIsPunching(false);
+  toast({
+    title: totalFailed === 0
+      ? `⚡ Auto-punch complete — ${totalOk} orders ✓`
+      : `⚡ Done — ${totalOk} ok, ${totalFailed} failed`,
+    variant: totalFailed > 0 ? "destructive" : "default",
+  });
+
+  void refetchOrders();
+}, [toast, refetchOrders, setWatchedSlots]);
 
   /* ── execute main order ── */
   const handleExecute = useCallback(async () => {
@@ -1410,9 +1438,9 @@ newSlots.push({
     const failedNames = effectiveSelection.filter((_, i) => results[i].status === "rejected").map(({ accountId }) => getAccountName(accountId));
     toast({ title: ok === results.length ? "Order Executed ✓" : `Partial (${ok}/${results.length})`, description: failedNames.length > 0 ? `Failed: ${failedNames.join(", ")}` : undefined });
 
-    if (showTpsl && (tpPrice || slPrice)) {
-      tpslMut.mutate({ data: { accountIds: effectiveAccountIds, symbol: symbol.toUpperCase(), tpPrice: tpPrice ? parseFloat(tpPrice) : undefined, slPrice: slPrice ? parseFloat(slPrice) : undefined } });
-    }
+if (tpPrice || slPrice) {
+  tpslMut.mutate({ data: { accountIds: effectiveAccountIds, symbol: symbol.toUpperCase(), tpPrice: tpPrice ? parseFloat(tpPrice) : undefined, slPrice: slPrice ? parseFloat(slPrice) : undefined } });
+}
     if (pendingOnly.length > 0 && ok > 0) {
       persistSelection(mergedSelection, { silent: true });
       setPendingAdditions([]);
@@ -1423,10 +1451,22 @@ newSlots.push({
       if (!ep || isNaN(ep)) {
         toast({ title: "⚡ Auto-punch skipped", description: "Enter a price so the puncher knows where to place limit orders.", variant: "destructive" });
       } else {
-        void runAutoPunch(symbol.toUpperCase(), side, ep, baseQty, effectiveSelection, autoPunchConfig);
+        // NEW: carry the terminal order's own per-account results into the
+        // puncher so it becomes a monitored/repunchable slot (leg 0) instead
+        // of a one-off order with no TP and no repunch tracking.
+        const entryOrderResults = effectiveSelection
+          .map(({ accountId, multiplier }, i) => {
+            const r = results[i];
+            if (r.status !== "fulfilled") return null;
+            const orderId = (r.value as any)?.[0]?.orderId ?? undefined;
+            return { accountId, multiplier, orderId, filled: orderType === "MARKET" };
+          })
+          .filter(Boolean) as { accountId: number; multiplier: number; orderId?: string; filled: boolean }[];
+
+        void runAutoPunch(symbol.toUpperCase(), side, ep, baseQty, effectiveSelection, autoPunchConfig, entryOrderResults);
       }
     }
-  }, [effectiveSelection, effectiveAccountIds, pendingOnly, mergedSelection, symbol, quantity, price, side, orderType, showTpsl, tpPrice, slPrice, tpslMut, persistSelection, autoPunchEnabled, autoPunchConfig, runAutoPunch, toast]);
+  }, [effectiveSelection, effectiveAccountIds, pendingOnly, mergedSelection, symbol, quantity, price, side, orderType, tpPrice, slPrice, tpslMut, persistSelection, autoPunchEnabled, autoPunchConfig, runAutoPunch, toast]);
 
   /* ── leverage ── */
   const handleSetLeverage = useCallback(() => {
@@ -1726,10 +1766,10 @@ const handleAddMargin = useCallback((pos: Position) => {
   ];
 
   return (
-    <div className="flex flex-col h-screen overflow-hidden">
+    <div className="flex flex-col h-full overflow-hidden">
 
       {/* Header */}
-      <div className="flex items-center justify-between px-5 py-3 shrink-0"
+      {/* <div className="flex items-center justify-between px-5 py-3 shrink-0"
         style={{ borderBottom: "1px solid hsl(var(--border))", background: "hsl(var(--card))" }}>
         <div className="flex items-center gap-2.5">
           <Zap className="w-5 h-5" style={{ color: "hsl(var(--primary))" }} />
@@ -1752,7 +1792,7 @@ const handleAddMargin = useCallback((pos: Position) => {
           )}
         </div>
         <span className="text-xs text-muted-foreground">Positions auto-refresh 10s</span>
-      </div>
+      </div> */}
 
       {/* Body */}
       <div className="flex flex-1 min-h-0">
@@ -1809,29 +1849,23 @@ const handleAddMargin = useCallback((pos: Position) => {
               <label className="text-[10px] font-semibold uppercase tracking-widest text-muted-foreground mb-1 block">Base Quantity</label>
               <input className="w-full rounded-lg px-3 py-2.5 text-sm font-mono bg-input border border-border focus:outline-none focus:ring-1 focus:ring-ring transition-colors"
                 type="number" min="0" step="any" value={quantity} onChange={(e) => setQuantity(e.target.value)} placeholder="0.00" />
-              <p className="text-[10px] text-muted-foreground mt-1">Actual = base × account multiplier.</p>
+              {/* <p className="text-[10px] text-muted-foreground mt-1">Actual = base × account multiplier.</p> */}
             </div>
 
             {/* TP/SL */}
-            <button onClick={() => setShowTpsl((v) => !v)} className="flex items-center justify-between w-full px-3 py-2 rounded-lg text-xs font-semibold transition-colors"
-              style={{ background: showTpsl ? "hsl(258 82% 64% / 0.1)" : "hsl(var(--muted))", color: showTpsl ? "hsl(var(--primary))" : "hsl(var(--muted-foreground))", border: showTpsl ? "1px solid hsl(258 82% 64% / 0.3)" : "1px solid transparent" }}>
-              <span>Take Profit / Stop Loss</span>
-              {showTpsl ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
-            </button>
-            {showTpsl && (
-              <div className="grid grid-cols-2 gap-2">
-                <div>
-                  <label className="text-[10px] font-semibold uppercase tracking-widest text-muted-foreground mb-1 block">Take Profit</label>
-                  <input className="w-full rounded-lg px-3 py-2 text-sm font-mono bg-input border border-border focus:outline-none focus:ring-1 focus:ring-ring"
-                    type="number" step="any" value={tpPrice} onChange={(e) => setTpPrice(e.target.value)} placeholder="TP price" />
-                </div>
-                <div>
-                  <label className="text-[10px] font-semibold uppercase tracking-widest text-muted-foreground mb-1 block">Stop Loss</label>
-                  <input className="w-full rounded-lg px-3 py-2 text-sm font-mono bg-input border border-border focus:outline-none focus:ring-1 focus:ring-ring"
-                    type="number" step="any" value={slPrice} onChange={(e) => setSlPrice(e.target.value)} placeholder="SL price" />
-                </div>
-              </div>
-            )}
+            <div>
+  {/* <label className="text-[10px] font-semibold uppercase tracking-widest text-muted-foreground mb-1.5 block">Take Profit / Stop Loss</label> */}
+  <div className="grid grid-cols-2 gap-2">
+    <div>
+      <input className="w-full rounded-lg px-3 py-2 text-sm font-mono bg-input border border-border focus:outline-none focus:ring-1 focus:ring-ring"
+        type="number" step="any" value={tpPrice} onChange={(e) => setTpPrice(e.target.value)} placeholder="TP price" />
+    </div>
+    <div>
+      <input className="w-full rounded-lg px-3 py-2 text-sm font-mono bg-input border border-border focus:outline-none focus:ring-1 focus:ring-ring"
+        type="number" step="any" value={slPrice} onChange={(e) => setSlPrice(e.target.value)} placeholder="SL price" />
+    </div>
+  </div>
+</div>
 
             {/* Leverage */}
             <div>
@@ -2539,15 +2573,15 @@ const handleAddMargin = useCallback((pos: Position) => {
                         }}
                       />
                     </th>
-                    {["Account", "Phone", "Symbol", "Side", "Limit Price", "TP Price", "Qty", "Status", "Re-punches", "Actions"].map((h) => (
-                      <th key={h} className="px-3 py-2 text-left font-semibold uppercase tracking-wider text-muted-foreground">{h}</th>
-                    ))}
+                    {["Account", "Phone", "Symbol", "Side", "Limit Price", "Mark Price", "TP Price", "Qty", "Status", "Re-punches", "Actions"].map((h) => (
+  <th key={h} className="px-3 py-2 text-left font-semibold uppercase tracking-wider text-muted-foreground">{h}</th>
+))}
                   </tr>
                 </thead>
                 <tbody>
                   {filteredSlots.length === 0 ? (
                     <tr>
-                      <td colSpan={10} className="text-center py-16 text-muted-foreground">
+                      <td colSpan={11} className="text-center py-16 text-muted-foreground">
                         {watchedSlots.length === 0 ? (
                           <div className="flex flex-col items-center gap-2">
                             <RefreshCw className="w-6 h-6 opacity-30" />
@@ -2584,6 +2618,12 @@ const handleAddMargin = useCallback((pos: Position) => {
                             </span>
                           </td>
                           <td className="px-3 py-2.5 font-mono">{fmt(slot.limitPrice)}</td>
+                          <td className="px-3 py-2.5 font-mono">
+  {(() => {
+    const mp = getMarkPrice(slot.accountId, slot.symbol);
+    return mp != null ? fmt(mp) : <span className="text-muted-foreground">—</span>;
+  })()}
+</td>
                           <td className="px-3 py-2.5 font-mono text-muted-foreground">{fmt(slot.tpPrice)}</td>
                           <td className="px-3 py-2.5 font-mono">{fmt(slot.quantity, 4)}</td>
                           <td className="px-3 py-2.5">

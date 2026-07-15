@@ -1,4 +1,5 @@
 import { Link, useLocation } from "wouter";
+import logo from "@/assets/mts-logo.png";
 import {
   LayoutDashboard,
   Zap,
@@ -9,6 +10,7 @@ import {
   Settings,
   LogOut,
 } from "lucide-react";
+import { PriceTicker } from "@/components/PriceTicker"; // ← adjust path if you placed it elsewhere
 
 export function Layout({ children }: { children: React.ReactNode }) {
   const [location] = useLocation();
@@ -34,17 +36,13 @@ export function Layout({ children }: { children: React.ReactNode }) {
         }}
       >
         {/* Brand */}
-        <div
-          className="h-14 w-full flex items-center justify-center shrink-0"
-          style={{ borderBottom: "1px solid hsl(var(--sidebar-border))" }}
-        >
-          <div
-            className="w-7 h-7 rounded-lg flex items-center justify-center shrink-0"
-            style={{ background: "hsl(var(--primary))", boxShadow: "0 0 12px hsl(var(--primary) / 0.4)" }}
-          >
-            <Zap className="w-4 h-4 text-white" fill="white" />
-          </div>
-        </div>
+        {/* Brand */}
+<div
+  className="h-14 w-full flex items-center justify-center shrink-0"
+  style={{ borderBottom: "1px solid hsl(var(--sidebar-border))" }}
+>
+  <img src={logo} alt="My Trade Study" className="w-9 h-9 object-contain rounded-lg" />
+</div>
 
         {/* Nav items */}
         <nav className="flex-1 w-full px-2 py-3 space-y-1 overflow-y-auto flex flex-col items-center">
@@ -114,7 +112,11 @@ export function Layout({ children }: { children: React.ReactNode }) {
         </div>
       </div>
 
-      <main className="flex-1 h-screen overflow-y-auto bg-background">{children}</main>
+      {/* Main content: ticker bar pinned at top, page content scrolls below it */}
+      <main className="flex-1 h-screen flex flex-col overflow-hidden bg-background">
+  <PriceTicker />
+  <div className="flex-1 min-h-0 overflow-hidden">{children}</div>
+</main>
     </div>
   );
 }
