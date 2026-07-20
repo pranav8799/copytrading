@@ -1,8 +1,6 @@
 import { db, settingsTable, accountsTable } from "@workspace/db";
 import { eq } from "drizzle-orm";
-// import { callCoinswitch, executeOnAllAccounts } from "../lib/coinswitchApi";
 import { callCoinswitch, executeOnAllAccounts } from "../lib/coinswitchApi";
-// import callCoinswitch, { executeOnAllAccounts } from "../lib/coinswitchApi";
 import { decrypt } from "../lib/crypto";
 
 export interface WatchedSlot {
@@ -113,13 +111,20 @@ async function tick() {
         if (!slot.seenOpen) { next[i] = { ...slot, seenOpen: true }; changed = true; }
         continue;
       }
-      if (!slot.seenOpen) continue; // avoid acting on a stale/racy read right after placing
 
+      // Order isn't resting on the book anymore. Check the position FIRST,
+      // regardless of seenOpen — an order can fill instantly (e.g. a MARKET
+      // entry, or a LIMIT entry placed right at the market price) before we
+      // ever get a chance to observe it resting open. Only fall back to the
+      // seenOpen gate to decide "cancelled" vs "still being placed", never
+      // to decide "filled".
       const expectedSide = slot.side === "BUY" ? "LONG" : "SHORT";
       const filled = await hasOpenPosition(slot.accountId, slot.symbol, expectedSide);
-      if (filled === null) continue; // retry next tick
+      if (filled === null) continue; // fetch failed, retry next tick
+
       if (!filled) {
-        // cancelled/rejected rather than filled — drop it
+        if (!slot.seenOpen) continue; // never seen open + no position yet — might just not be placed/registered yet, wait
+        // was seen open before, now gone, and no position — cancelled/rejected
         next.splice(i, 1); i--; changed = true;
         continue;
       }

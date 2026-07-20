@@ -224,6 +224,7 @@ const slotStatusColor = (slot: WatchedSlot): string => {
 
 /* ── constants ── */
 const LEVERAGE_PRESETS = [5, 10, 20, 30, 50];
+const SYMBOL_OPTIONS = ["XAUUSDT", "XAGUSDT", "BTCUSDT", "ETHUSDT", "CLUSDT"] as const;
 const ORDER_TYPES: { value: OrderPayloadOrderType; label: string }[] = [
   { value: "MARKET", label: "Market" },
   { value: "LIMIT", label: "Limit" },
@@ -1330,11 +1331,17 @@ const setWatchedSlots = useSetWatchedSlots();
   let totalOk = 0, totalFailed = 0;
   const newSlots: WatchedSlot[] = [];
 
-  // ── NEW: register the terminal ("entry") order itself as leg 0 so it
-  // gets a TP placed and is monitored/repunched just like the auto-punch legs ──
+// ── register the terminal ("entry") order itself as leg 0 so it
+  // gets a TP placed and is monitored/repunched just like the auto-punch legs.
+  // Always register as pending_fill, regardless of MARKET or LIMIT — the
+  // backend repunchEngine.ts Phase 1 checks the actual position before
+  // relying on the "seen resting open" flag, so it correctly detects an
+  // instant MARKET fill and places the TP itself from the backend. Doing
+  // it here in the frontend bypasses that single source of truth and
+  // produces a tpOrderId that doesn't correspond to a real resting order. ──
   if (entryOrderResults?.length) {
     const tp0 = tradeSide === "BUY" ? tradeEntryPrice + cfg.tpPoints : tradeEntryPrice - cfg.tpPoints;
-    for (const { accountId, multiplier, orderId, filled } of entryOrderResults) {
+    for (const { accountId, multiplier, orderId } of entryOrderResults) {
       newSlots.push({
         id: `${accountId}-${tradeSymbol}-${tradeSide}-${tradeEntryPrice}-entry`,
         accountId,
@@ -1344,15 +1351,12 @@ const setWatchedSlots = useSetWatchedSlots();
         tpPrice: tp0,
         quantity: baseQty * multiplier,
         repunchCount: 0,
-        // MARKET orders fill immediately → skip straight to placing the TP.
-        // LIMIT orders sit on the book like any auto-punch leg → wait for fill.
-        status: filled ? "placing_tp" : "pending_fill",
+        status: "pending_fill",
         orderId,
-        seenOpen: filled,
+        seenOpen: false,
       });
     }
   }
-
   for (let n = 1; n <= cfg.orderCount; n++) {
     const limitPrice = tradeSide === "BUY"
       ? tradeEntryPrice - cfg.stepSize * n
@@ -1803,10 +1807,20 @@ const handleAddMargin = useCallback((pos: Position) => {
 
             {/* Symbol */}
             <div>
-              <label className="text-[10px] font-semibold uppercase tracking-widest text-muted-foreground mb-1 block">Symbol</label>
-              <input className="w-full rounded-lg px-3 py-2.5 text-sm font-bold uppercase tracking-wider bg-input border border-border focus:outline-none focus:ring-1 focus:ring-ring transition-colors"
-                value={symbol} onChange={(e) => setSymbol(e.target.value.toUpperCase())} placeholder="XAUUSDT" />
-            </div>
+  <label className="text-[10px] font-semibold uppercase tracking-widest text-muted-foreground mb-1 block">Symbol</label>
+  <div className="relative">
+    <select
+      value={symbol}
+      onChange={(e) => setSymbol(e.target.value)}
+      className="w-full appearance-none rounded-lg px-3 py-2.5 pr-9 text-sm font-bold uppercase tracking-wider bg-input border border-border focus:outline-none focus:ring-1 focus:ring-ring transition-colors cursor-pointer"
+    >
+      {SYMBOL_OPTIONS.map((s) => (
+        <option key={s} value={s}>{s}</option>
+      ))}
+    </select>
+    <ChevronDown className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 pointer-events-none text-muted-foreground" />
+  </div>
+</div>
 
             {/* BUY / SELL */}
             <div className="grid grid-cols-2 gap-2">
@@ -2355,7 +2369,7 @@ const handleAddMargin = useCallback((pos: Position) => {
                         }}
                       />
                     </th>
-                    {["Account", "Phone", "Symbol", "Side", "Size", "Entry", "Mark", "PnL", "Liq.", "Actions"].map((h) => (
+                    {["Account", "Phone", "Sym", "Side", "Size", "Entry", "PnL", "Liq.", "Actions"].map((h) => (
                       <th key={h} className="px-3 py-2 text-left font-semibold uppercase tracking-wider text-muted-foreground">{h}</th>
                     ))}
                   </tr>
@@ -2395,12 +2409,12 @@ const handleAddMargin = useCallback((pos: Position) => {
                             <td className="px-3 py-2.5">
                               <span className="px-2 py-0.5 rounded-full text-[10px] font-bold"
                                 style={pos.positionSide === "LONG" ? { background: "hsl(162 88% 42% / 0.15)", color: "hsl(162 88% 46%)" } : { background: "hsl(345 88% 58% / 0.15)", color: "hsl(345 88% 62%)" }}>
-                                {pos.positionSide === "LONG" ? "▲ LONG" : "▼ SHORT"}
+                                {pos.positionSide === "LONG" ? "▲" : "▼"}
                               </span>
                             </td>
                             <td className="px-3 py-2.5 font-mono">{fmt(pos.positionSize, 4)}</td>
                             <td className="px-3 py-2.5 font-mono">{fmt(pos.avgEntryPrice)}</td>
-                            <td className="px-3 py-2.5 font-mono">{fmt(pos.markPrice)}</td>
+                            {/* <td className="px-3 py-2.5 font-mono">{fmt(pos.markPrice)}</td> */}
                             <td className={`px-3 py-2.5 font-mono font-semibold ${pnlColor(pos.unrealisedPnl)}`}>{pnlSign(pos.unrealisedPnl)}{fmt(pos.unrealisedPnl)} USDT</td>
                             <td className="px-3 py-2.5 font-mono text-muted-foreground">
   {addingMarginKey === posKey ? (
@@ -2573,7 +2587,7 @@ const handleAddMargin = useCallback((pos: Position) => {
                         }}
                       />
                     </th>
-                    {["Account", "Phone", "Symbol", "Side", "Limit Price", "Mark Price", "TP Price", "Qty", "Status", "Re-punches", "Actions"].map((h) => (
+                    {["Account", "Phone", "Symbol", "Side", "Limit Price", "TP Price", "Qty", "Status", "Re-punches", "Actions"].map((h) => (
   <th key={h} className="px-3 py-2 text-left font-semibold uppercase tracking-wider text-muted-foreground">{h}</th>
 ))}
                   </tr>
@@ -2618,12 +2632,12 @@ const handleAddMargin = useCallback((pos: Position) => {
                             </span>
                           </td>
                           <td className="px-3 py-2.5 font-mono">{fmt(slot.limitPrice)}</td>
-                          <td className="px-3 py-2.5 font-mono">
+                          {/* <td className="px-3 py-2.5 font-mono">
   {(() => {
     const mp = getMarkPrice(slot.accountId, slot.symbol);
     return mp != null ? fmt(mp) : <span className="text-muted-foreground">—</span>;
   })()}
-</td>
+</td> */}
                           <td className="px-3 py-2.5 font-mono text-muted-foreground">{fmt(slot.tpPrice)}</td>
                           <td className="px-3 py-2.5 font-mono">{fmt(slot.quantity, 4)}</td>
                           <td className="px-3 py-2.5">
