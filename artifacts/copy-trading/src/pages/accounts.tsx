@@ -7,6 +7,9 @@ import {
   useUpdateAccount,
   useGetSettings,
   useUpdateSettings,
+  useGetBalances,
+  useGetPositions,
+  useGetPnl, // ← bulk PnL hook for GET /pnl. If your codegen named this differently, swap it here.
 } from "@workspace/api-client-react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
@@ -50,11 +53,22 @@ type StatusFilter = "all" | "active" | "disabled";
 type SelectedFilter = "all" | "selected" | "unselected";
 type BalanceFilter = "all" | "with" | "without";
 
-const fmtBalance = (v?: string | null) => {
+const fmtBalance = (v?: string | number | null) => {
   if (v == null) return "—";
-  const n = parseFloat(v);
+  const n = typeof v === "string" ? parseFloat(v) : v;
   if (isNaN(n)) return "—";
   return `$${n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+};
+
+const fmtPnl = (v?: number | null) => {
+  if (v == null || isNaN(v)) return "—";
+  const sign = v > 0 ? "+" : "";
+  return `${sign}$${v.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+};
+
+const pnlColorClass = (v?: number | null) => {
+  if (v == null || isNaN(v) || v === 0) return "text-muted-foreground";
+  return v > 0 ? "text-green-500" : "text-red-500";
 };
 
 const fmtUpdatedAt = (v?: string | null) => {
@@ -62,11 +76,134 @@ const fmtUpdatedAt = (v?: string | null) => {
   return new Date(v).toLocaleString();
 };
 
+function MarketProxyCard() {
+  const { toast } = useToast();
+  const [isOpen, setIsOpen] = useState(false);
+  const [apiKey, setApiKey] = useState("");
+  const [secretKey, setSecretKey] = useState("");
+  const [status, setStatus] = useState<{ configured: boolean; apiKeyMasked: string | null } | null>(null);
+  const [isSaving, setIsSaving] = useState(false);
+
+  const authHeaders = (): Record<string, string> => {
+    const token = localStorage.getItem("ct_token");
+    const headers: Record<string, string> = {};
+    if (token) headers.Authorization = `Bearer ${token}`;
+    return headers;
+  };
+
+  const fetchStatus = () => {
+    fetch("/api/settings/market-proxy", { headers: authHeaders() })
+      .then((r) => r.json())
+      .then(setStatus)
+      .catch(() => setStatus(null));
+  };
+
+  useEffect(() => { fetchStatus(); }, []);
+
+  const resetForm = () => {
+    setApiKey("");
+    setSecretKey("");
+  };
+
+  const handleSave = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!apiKey || !secretKey) {
+      toast({ title: "Both fields are required", variant: "destructive" });
+      return;
+    }
+    setIsSaving(true);
+    try {
+      const res = await fetch("/api/settings/market-proxy", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", ...authHeaders() },
+        body: JSON.stringify({ apiKey, secretKey }),
+      });
+      if (!res.ok) throw new Error((await res.json()).error ?? "Failed to save");
+      toast({ title: "Market proxy credentials updated ✓" });
+      resetForm();
+      fetchStatus();
+      setIsOpen(false);
+    } catch (err: any) {
+      toast({ title: "Failed to save", description: err.message, variant: "destructive" });
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
+  return (
+    <Card>
+      <CardContent className="p-4 flex items-center justify-between gap-4">
+        <div>
+          <h3 className="font-medium text-sm">Market Data Proxy Credentials</h3>
+          <p className="text-xs text-muted-foreground mt-0.5">
+            Used only for the live price bar (ticker/orderbook). Not shown in the accounts table below and never used for trading.
+          </p>
+          <div className="text-xs mt-1.5">
+            {status === null ? (
+              <span className="text-muted-foreground">Checking status…</span>
+            ) : status.configured ? (
+              <span className="text-green-500">✓ Configured ({status.apiKeyMasked})</span>
+            ) : (
+              <span className="text-destructive">✕ Not configured — live prices will fail</span>
+            )}
+          </div>
+        </div>
+
+        <Button type="button" onClick={() => setIsOpen(true)}>
+          Update Proxy Keys
+        </Button>
+      </CardContent>
+
+      <Dialog open={isOpen} onOpenChange={(open) => { setIsOpen(open); if (!open) resetForm(); }}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Update Market Proxy Credentials</DialogTitle>
+            <DialogDescription>
+              Used only for the live price bar. Never used for trading.
+            </DialogDescription>
+          </DialogHeader>
+          <form onSubmit={handleSave} className="space-y-4">
+            <div className="space-y-2">
+              <Label htmlFor="proxyApiKey">API Key</Label>
+              <Input
+                id="proxyApiKey"
+                value={apiKey}
+                onChange={(e) => setApiKey(e.target.value)}
+                placeholder="New API key"
+              />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="proxySecretKey">Secret Key</Label>
+              <Input
+                id="proxySecretKey"
+                type="password"
+                value={secretKey}
+                onChange={(e) => setSecretKey(e.target.value)}
+                placeholder="New secret key"
+              />
+            </div>
+            <DialogFooter>
+              <Button type="button" variant="outline" onClick={() => setIsOpen(false)}>
+                Cancel
+              </Button>
+              <Button type="submit" disabled={isSaving}>
+                {isSaving ? "Saving..." : "Save"}
+              </Button>
+            </DialogFooter>
+          </form>
+        </DialogContent>
+      </Dialog>
+    </Card>
+  );
+}
+
 export function AccountsPage() {
   const { data: accounts, isLoading } = useListAccounts();
   const { data: settings, isLoading: settingsLoading } = useGetSettings();
+  const { data: balances, isLoading: balancesLoading } = useGetBalances();
+  const { data: positions, isLoading: positionsLoading } = useGetPositions();
+  const { data: pnlData, isLoading: pnlLoading } = useGetPnl();
   const [, setLocation] = useLocation();
-  // const { data: accounts, isLoading } = useListAccounts();
   const queryClient = useQueryClient();
   const { toast } = useToast();
 
@@ -98,6 +235,53 @@ export function AccountsPage() {
   const verifyMutation = useVerifyAccount();
   const updateMutation = useUpdateAccount();
   const updateSettingsMutation = useUpdateSettings();
+
+  /* ── margin / balance / pnl calculations (accountId -> value) ─────────── */
+  const usedMarginByAccount = useMemo(() => {
+    const map = new Map<number, number>();
+    for (const p of positions ?? []) {
+      const prev = map.get(p.accountId) ?? 0;
+      map.set(p.accountId, prev + Number(p.positionMargin ?? 0));
+    }
+    return map;
+  }, [positions]);
+
+  const totalBalanceByAccount = useMemo(() => {
+    const map = new Map<number, number>();
+    for (const b of balances ?? []) {
+      map.set(b.accountId, Number(b.totalBalance ?? 0));
+    }
+    return map;
+  }, [balances]);
+
+  const availableBalanceByAccount = useMemo(() => {
+    const map = new Map<number, number>();
+    for (const b of balances ?? []) {
+      map.set(b.accountId, Number(b.availableBalance ?? 0));
+    }
+    return map;
+  }, [balances]);
+
+  const blockedMarginByAccount = useMemo(() => {
+    const map = new Map<number, number>();
+    for (const b of balances ?? []) {
+      const total = Number(b.totalBalance ?? 0);
+      const available = Number(b.availableBalance ?? 0);
+      const used = usedMarginByAccount.get(b.accountId) ?? 0;
+      map.set(b.accountId, Math.max(0, total - available - used));
+    }
+    return map;
+  }, [balances, usedMarginByAccount]);
+
+  const realizedPnlByAccount = useMemo(() => {
+    const map = new Map<number, number>();
+    for (const p of pnlData ?? []) {
+      map.set(p.accountId, Number(p.netPnl ?? p.realisedPnl ?? 0));
+    }
+    return map;
+  }, [pnlData]);
+
+  const marginLoading = balancesLoading || positionsLoading;
 
   /* ── trading selection state ──────────────────────────────────────── */
   const [selection, setSelection] = useState<SelectionMap>(new Map());
@@ -393,6 +577,7 @@ export function AccountsPage() {
           <Button onClick={() => setIsAddOpen(true)}>Add Account</Button>
         </div>
       </div>
+      <MarketProxyCard />
 
       {/* Search & Filters */}
       <Card>
@@ -458,7 +643,7 @@ export function AccountsPage() {
       </Card>
 
       <Card>
-        <CardContent className="p-0">
+        <CardContent className="p-0 overflow-x-auto">
           <Table>
             <TableHeader>
               <TableRow>
@@ -466,8 +651,11 @@ export function AccountsPage() {
                 <TableHead>Name</TableHead>
                 <TableHead>Mobile Number</TableHead>
                 <TableHead>Status</TableHead>
-                <TableHead>Last Balance</TableHead>
-                <TableHead>Current Balance</TableHead>
+                <TableHead>Total Balance</TableHead>
+                <TableHead>Available Balance</TableHead>
+                <TableHead>Used Margin</TableHead>
+                <TableHead>Blocked Margin</TableHead>
+                <TableHead>Realized PnL</TableHead>
                 <TableHead>Updated</TableHead>
                 <TableHead className="w-24">Multiplier</TableHead>
                 <TableHead className="text-right">Actions</TableHead>
@@ -476,61 +664,79 @@ export function AccountsPage() {
             <TableBody>
               {isLoading || settingsLoading ? (
                 <TableRow>
-                  <TableCell colSpan={9} className="text-center py-8 text-muted-foreground">Loading accounts...</TableCell>
+                  <TableCell colSpan={12} className="text-center py-8 text-muted-foreground">Loading accounts...</TableCell>
                 </TableRow>
               ) : allRows.length === 0 ? (
                 <TableRow>
-                  <TableCell colSpan={9} className="text-center py-8 text-muted-foreground">No accounts configured.</TableCell>
+                  <TableCell colSpan={12} className="text-center py-8 text-muted-foreground">No accounts configured.</TableCell>
                 </TableRow>
               ) : rows.length === 0 ? (
                 <TableRow>
-                  <TableCell colSpan={9} className="text-center py-8 text-muted-foreground">
+                  <TableCell colSpan={12} className="text-center py-8 text-muted-foreground">
                     No accounts match your search/filters.
                   </TableCell>
                 </TableRow>
               ) : (
-pagedRows.map((acc) => {
-  const checked = selection.has(acc.id);
-  return (
-    <TableRow
-      key={acc.id}
-      className="cursor-pointer hover:bg-muted/50"
-      onClick={() => setLocation(`/accounts/${acc.id}`)}
-    >
-      <TableCell onClick={(e) => e.stopPropagation()}>
-        <Checkbox
-          checked={checked}
-          disabled={!acc.isActive}
-          onCheckedChange={(v) => toggleOne(acc.id, !!v)}
-        />
-      </TableCell>
-      <TableCell className="font-medium">{acc.name}</TableCell>
-      <TableCell className="text-sm">{acc.mobileNumber}</TableCell>
-      <TableCell onClick={(e) => e.stopPropagation()}>
-        <div className="flex items-center gap-2">
-          <Switch
-            checked={acc.isActive}
-            onCheckedChange={() => handleToggleActive(acc.id, acc.isActive, acc.name)}
-          />
-          {acc.isActive ? (
-            <span title="Active" className="text-green-500 text-lg">✓</span>
-          ) : (
-            <span title="Disabled" className="text-muted-foreground text-lg">✕</span>
-          )}
-        </div>
-      </TableCell>
-      <TableCell className="font-mono text-sm text-muted-foreground">{fmtBalance(acc.lastBalance)}</TableCell>
-      <TableCell className="font-mono text-sm">{fmtBalance(acc.currentBalance)}</TableCell>
-      <TableCell className="text-sm text-muted-foreground">{fmtUpdatedAt(acc.balanceUpdatedAt)}</TableCell>
-      <TableCell className={`font-mono text-sm ${!checked ? "text-muted-foreground" : ""}`}>
-        {`${multipliers.get(acc.id) ?? 1}×`}
-      </TableCell>
-      <TableCell className="text-right" onClick={(e) => e.stopPropagation()}>
-        <Button variant="outline" size="sm" onClick={() => openEdit(acc)}>Edit</Button>
-      </TableCell>
-    </TableRow>
-  );
-})
+                pagedRows.map((acc) => {
+                  const checked = selection.has(acc.id);
+                  const totalBalance = totalBalanceByAccount.get(acc.id);
+                  const availableBalance = availableBalanceByAccount.get(acc.id);
+                  const usedMargin = usedMarginByAccount.get(acc.id);
+                  const blockedMargin = blockedMarginByAccount.get(acc.id);
+                  const realizedPnl = realizedPnlByAccount.get(acc.id);
+                  return (
+                    <TableRow
+                      key={acc.id}
+                      className="cursor-pointer hover:bg-muted/50"
+                      onClick={() => setLocation(`/accounts/${acc.id}`)}
+                    >
+                      <TableCell onClick={(e) => e.stopPropagation()}>
+                        <Checkbox
+                          checked={checked}
+                          disabled={!acc.isActive}
+                          onCheckedChange={(v) => toggleOne(acc.id, !!v)}
+                        />
+                      </TableCell>
+                      <TableCell className="font-medium" title={acc.mobileNumber}>{acc.name}</TableCell>
+                      <TableCell className="text-sm">{acc.mobileNumber}</TableCell>
+                      <TableCell onClick={(e) => e.stopPropagation()}>
+                        <div className="flex items-center gap-2">
+                          <Switch
+                            checked={acc.isActive}
+                            onCheckedChange={() => handleToggleActive(acc.id, acc.isActive, acc.name)}
+                          />
+                          {acc.isActive ? (
+                            <span title="Active" className="text-green-500 text-lg">✓</span>
+                          ) : (
+                            <span title="Disabled" className="text-muted-foreground text-lg">✕</span>
+                          )}
+                        </div>
+                      </TableCell>
+                      <TableCell className="font-mono text-sm">
+                        {balancesLoading ? "…" : fmtBalance(totalBalance)}
+                      </TableCell>
+                      <TableCell className="font-mono text-sm">
+                        {balancesLoading ? "…" : fmtBalance(availableBalance)}
+                      </TableCell>
+                      <TableCell className="font-mono text-sm text-muted-foreground">
+                        {marginLoading ? "…" : fmtBalance(usedMargin)}
+                      </TableCell>
+                      <TableCell className="font-mono text-sm text-muted-foreground">
+                        {marginLoading ? "…" : fmtBalance(blockedMargin)}
+                      </TableCell>
+                      <TableCell className={`font-mono text-sm font-medium ${pnlColorClass(realizedPnl)}`}>
+                        {pnlLoading ? "…" : fmtPnl(realizedPnl)}
+                      </TableCell>
+                      <TableCell className="text-sm text-muted-foreground">{fmtUpdatedAt(acc.balanceUpdatedAt)}</TableCell>
+                      <TableCell className={`font-mono text-sm ${!checked ? "text-muted-foreground" : ""}`}>
+                        {`${multipliers.get(acc.id) ?? 1}×`}
+                      </TableCell>
+                      <TableCell className="text-right" onClick={(e) => e.stopPropagation()}>
+                        <Button variant="outline" size="sm" onClick={() => openEdit(acc)}>Edit</Button>
+                      </TableCell>
+                    </TableRow>
+                  );
+                })
               )}
             </TableBody>
           </Table>
@@ -671,6 +877,8 @@ pagedRows.map((acc) => {
     </div>
   );
 }
+
+
 
 
 // *****************************************29/06/2026***********************************************************

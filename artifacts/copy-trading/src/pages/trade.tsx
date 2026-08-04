@@ -203,9 +203,9 @@ const calcMargin = (quantity: string | number, price: string | number, lev: numb
 const slotStatusLabel = (slot: WatchedSlot): string => {
   if (slot.stopped) return "Stopped";
   switch (slot.status) {
-    case "pending_fill": return "Pending Fill";
+    case "pending_fill": return "Pending";
     case "placing_tp": return "Placing TP";
-    case "watching": return "Watching";
+    case "watching": return "Trade";
     case "repunching": return "Re-punching…";
     default: return slot.status;
   }
@@ -1040,12 +1040,13 @@ function AddAccountsModal({ open, onClose, unselectedAccounts, getBalance, onSav
   const [draft, setDraft] = useState<Map<number, { checked: boolean; multiplier: string }>>(new Map());
 
   useEffect(() => {
-    if (open) {
-      const m = new Map<number, { checked: boolean; multiplier: string }>();
-      for (const acc of unselectedAccounts) m.set(acc.id, { checked: false, multiplier: "1" });
-      setDraft(m);
-    }
-  }, [open, unselectedAccounts]);
+  if (open) {
+    const m = new Map<number, { checked: boolean; multiplier: string }>();
+    for (const acc of unselectedAccounts) m.set(acc.id, { checked: false, multiplier: "1" });
+    setDraft(m);
+  }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+}, [open]);
 
   const toggle = (id: number) => setDraft((prev) => { const next = new Map(prev); const cur = next.get(id)!; next.set(id, { ...cur, checked: !cur.checked }); return next; });
   const setMul = (id: number, val: string) => setDraft((prev) => { const next = new Map(prev); const cur = next.get(id)!; next.set(id, { ...cur, multiplier: val }); return next; });
@@ -2339,13 +2340,13 @@ const handleAddMargin = useCallback((pos: Position) => {
                     label="Status"
                     value={repunchFilters.status}
                     options={[
-                      { value: "ALL", label: "All Statuses" },
-                      { value: "pending_fill", label: "Pending Fill" },
-                      { value: "placing_tp", label: "Placing TP" },
-                      { value: "watching", label: "Watching" },
-                      { value: "repunching", label: "Re-punching" },
-                      { value: "stopped", label: "Stopped" },
-                    ]}
+  { value: "ALL", label: "All Statuses" },
+  { value: "pending_fill", label: "Pending" },
+  { value: "placing_tp", label: "Placing TP" },
+  { value: "watching", label: "Trade" },
+  { value: "repunching", label: "Re-punching" },
+  { value: "stopped", label: "Stopped" },
+]}
                     onChange={(v) => setRepunchFilters((f) => ({ ...f, status: v as RepunchFilters["status"] }))}
                     activeColor="hsl(162 88% 42%)"
                   />
@@ -2369,7 +2370,7 @@ const handleAddMargin = useCallback((pos: Position) => {
                         }}
                       />
                     </th>
-                    {["Account", "Phone", "Sym", "Side", "Size", "Entry", "PnL", "Liq.", "Actions"].map((h) => (
+                    {["Account", "Sym", "Side", "Size", "Entry", "PnL", "Liq.", "Actions"].map((h) => (
                       <th key={h} className="px-3 py-2 text-left font-semibold uppercase tracking-wider text-muted-foreground">{h}</th>
                     ))}
                   </tr>
@@ -2377,7 +2378,7 @@ const handleAddMargin = useCallback((pos: Position) => {
                 <tbody>
                   {filteredPositions.length === 0 ? (
                     <tr>
-                      <td colSpan={11} className="text-center py-16 text-muted-foreground">
+                      <td colSpan={10} className="text-center py-16 text-muted-foreground">
                         {positionsArr.length === 0 ? "No open positions" : (
                           <div className="flex flex-col items-center gap-2">
                             <Filter className="w-6 h-6 opacity-30" />
@@ -2403,8 +2404,7 @@ const handleAddMargin = useCallback((pos: Position) => {
                                 setSelectedPositions((prev) => { const next = new Set(prev); if (v) next.add(posKey); else next.delete(posKey); return next; });
                               }} />
                             </td>
-                            <td className="px-3 py-2.5 font-medium max-w-[100px] truncate">{pos.accountName}</td>
-                            <td className="px-3 py-2.5 font-mono text-muted-foreground">{getMobileNumber(pos.accountId)}</td>
+                            <td className="px-3 py-2.5 font-medium max-w-[100px] truncate" title={getMobileNumber(pos.accountId)}>{pos.accountName}</td>
                             <td className="px-3 py-2.5 font-bold font-mono">{pos.symbol}</td>
                             <td className="px-3 py-2.5">
                               <span className="px-2 py-0.5 rounded-full text-[10px] font-bold"
@@ -2466,7 +2466,7 @@ const handleAddMargin = useCallback((pos: Position) => {
                           </tr>
                           {isTpslOpen && (
                             <tr key={`${posKey}-tpsl`}>
-                              <td colSpan={11} style={{ borderBottom: "1px solid hsl(var(--border))", padding: 0 }}>
+                              <td colSpan={10} style={{ borderBottom: "1px solid hsl(var(--border))", padding: 0 }}>
                                 <div className="flex items-center gap-3 px-6 py-3" style={{ background: "hsl(258 82% 64% / 0.05)", borderTop: "1px dashed hsl(var(--border))" }}>
                                   <span className="text-[10px] font-semibold uppercase tracking-widest text-muted-foreground w-24">{pos.symbol} TP/SL</span>
                                   <div className="flex items-center gap-1.5">
@@ -2507,7 +2507,7 @@ const handleAddMargin = useCallback((pos: Position) => {
                         }}
                       />
                     </th>
-                    {["Account", "Phone", "Symbol", "Side", "Type", "Qty", "Price", "Margin Req.", "Remaining Bal.", "Status", "Reduce Only", "Created", "Actions"].map((h) => (
+                    {["Account", "Symbol", "Side", "Type", "Qty", "Price", "Margin Req.", "Remaining Bal.", "Status", "Reduce Only", "Created", "Actions"].map((h) => (
                       <th key={h} className="px-3 py-2 text-left font-semibold uppercase tracking-wider text-muted-foreground">{h}</th>
                     ))}
                   </tr>
@@ -2515,7 +2515,7 @@ const handleAddMargin = useCallback((pos: Position) => {
                 <tbody>
                   {filteredOrders.length === 0 ? (
                     <tr>
-                      <td colSpan={14} className="text-center py-16 text-muted-foreground">
+                      <td colSpan={13} className="text-center py-16 text-muted-foreground">
                         {ordersArr.length === 0 ? "No open orders" : (
                           <div className="flex flex-col items-center gap-2">
                             <Filter className="w-6 h-6 opacity-30" />
@@ -2540,8 +2540,7 @@ const handleAddMargin = useCallback((pos: Position) => {
                               setSelectedOrders((prev) => { const next = new Set(prev); if (v) next.add(orderRowKey); else next.delete(orderRowKey); return next; });
                             }} />
                           </td>
-                          <td className="px-3 py-2.5 font-medium max-w-[100px] truncate">{order.accountName}</td>
-                          <td className="px-3 py-2.5 font-mono text-muted-foreground">{getMobileNumber(order.accountId)}</td>
+                          <td className="px-3 py-2.5 font-medium max-w-[100px] truncate" title={getMobileNumber(order.accountId)}>{order.accountName}</td>
                           <td className="px-3 py-2.5 font-bold font-mono">{order.symbol}</td>
                           <td className="px-3 py-2.5">
                             <span className="px-2 py-0.5 rounded-full text-[10px] font-bold"
@@ -2587,7 +2586,7 @@ const handleAddMargin = useCallback((pos: Position) => {
                         }}
                       />
                     </th>
-                    {["Account", "Phone", "Symbol", "Side", "Limit Price", "TP Price", "Qty", "Status", "Re-punches", "Actions"].map((h) => (
+                    {["Account", "Symbol", "Side", "Limit Price", "TP Price", "Qty", "Status", "Re-punches", "Actions"].map((h) => (
   <th key={h} className="px-3 py-2 text-left font-semibold uppercase tracking-wider text-muted-foreground">{h}</th>
 ))}
                   </tr>
@@ -2595,7 +2594,7 @@ const handleAddMargin = useCallback((pos: Position) => {
                 <tbody>
                   {filteredSlots.length === 0 ? (
                     <tr>
-                      <td colSpan={11} className="text-center py-16 text-muted-foreground">
+                      <td colSpan={10} className="text-center py-16 text-muted-foreground">
                         {watchedSlots.length === 0 ? (
                           <div className="flex flex-col items-center gap-2">
                             <RefreshCw className="w-6 h-6 opacity-30" />
@@ -2622,8 +2621,7 @@ const handleAddMargin = useCallback((pos: Position) => {
                               setSelectedSlots((prev) => { const next = new Set(prev); if (v) next.add(slot.id); else next.delete(slot.id); return next; });
                             }} />
                           </td>
-                          <td className="px-3 py-2.5 font-medium max-w-[100px] truncate">{getAccountName(slot.accountId)}</td>
-                          <td className="px-3 py-2.5 font-mono text-muted-foreground">{getMobileNumber(slot.accountId)}</td>
+                          <td className="px-3 py-2.5 font-medium max-w-[100px] truncate" title={getMobileNumber(slot.accountId)}>{getAccountName(slot.accountId)}</td>
                           <td className="px-3 py-2.5 font-bold font-mono">{slot.symbol}</td>
                           <td className="px-3 py-2.5">
                             <span className="px-2 py-0.5 rounded-full text-[10px] font-bold"

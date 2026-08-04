@@ -3,6 +3,7 @@ import { authMiddleware } from "../lib/auth";
 import { db, settingsTable } from "@workspace/db";
 import { eq } from "drizzle-orm";
 import { UpdateSettingsBody } from "@workspace/api-zod";
+import { encrypt, decrypt } from "../lib/crypto";
 
 const router = Router();
 
@@ -183,6 +184,36 @@ router.put("/settings", authMiddleware, async (req, res): Promise<void> => {
     autoPunchConfig: parseAutoPunchConfig(updated.autoPunchConfig),
     watchedSlots: parseWatchedSlots((updated as any).watchedSlots),
   });
+});
+
+router.get("/settings/market-proxy", authMiddleware, async (req, res): Promise<void> => {
+  const settings = await getOrCreateSettings();
+  const configured = !!(settings as any).marketProxyApiKey && !!(settings as any).marketProxySecretKey;
+  res.json({
+    configured,
+    apiKeyMasked: configured
+      ? `${decrypt((settings as any).marketProxyApiKey).slice(0, 4)}••••••••`
+      : null,
+  });
+});
+
+router.post("/settings/market-proxy", authMiddleware, async (req, res): Promise<void> => {
+  const { apiKey, secretKey } = req.body as { apiKey?: string; secretKey?: string };
+  if (!apiKey || !secretKey) {
+    res.status(400).json({ error: "apiKey and secretKey are required" });
+    return;
+  }
+
+  const settings = await getOrCreateSettings();
+  await db
+    .update(settingsTable)
+    .set({
+      marketProxyApiKey: encrypt(apiKey),
+      marketProxySecretKey: encrypt(secretKey),
+    } as any)
+    .where(eq(settingsTable.id, settings.id));
+
+  res.json({ success: true });
 });
 
 export default router;
