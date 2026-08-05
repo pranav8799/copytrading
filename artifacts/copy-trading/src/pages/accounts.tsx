@@ -9,7 +9,6 @@ import {
   useUpdateSettings,
   useGetBalances,
   useGetPositions,
-  useGetPnl, // ← bulk PnL hook for GET /pnl. If your codegen named this differently, swap it here.
 } from "@workspace/api-client-react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
@@ -202,7 +201,6 @@ export function AccountsPage() {
   const { data: settings, isLoading: settingsLoading } = useGetSettings();
   const { data: balances, isLoading: balancesLoading } = useGetBalances();
   const { data: positions, isLoading: positionsLoading } = useGetPositions();
-  const { data: pnlData, isLoading: pnlLoading } = useGetPnl();
   const [, setLocation] = useLocation();
   const queryClient = useQueryClient();
   const { toast } = useToast();
@@ -273,13 +271,14 @@ export function AccountsPage() {
     return map;
   }, [balances, usedMarginByAccount]);
 
-  const realizedPnlByAccount = useMemo(() => {
+  const unrealizedPnlByAccount = useMemo(() => {
     const map = new Map<number, number>();
-    for (const p of pnlData ?? []) {
-      map.set(p.accountId, Number(p.netPnl ?? p.realisedPnl ?? 0));
+    for (const p of positions ?? []) {
+      const prev = map.get(p.accountId) ?? 0;
+      map.set(p.accountId, prev + Number(p.unrealisedPnl ?? 0));
     }
     return map;
-  }, [pnlData]);
+  }, [positions]);
 
   const marginLoading = balancesLoading || positionsLoading;
 
@@ -655,7 +654,7 @@ export function AccountsPage() {
                 <TableHead>Available Balance</TableHead>
                 <TableHead>Used Margin</TableHead>
                 <TableHead>Blocked Margin</TableHead>
-                <TableHead>Realized PnL</TableHead>
+                <TableHead>Unrealized PnL</TableHead>
                 <TableHead>Updated</TableHead>
                 <TableHead className="w-24">Multiplier</TableHead>
                 <TableHead className="text-right">Actions</TableHead>
@@ -683,7 +682,7 @@ export function AccountsPage() {
                   const availableBalance = availableBalanceByAccount.get(acc.id);
                   const usedMargin = usedMarginByAccount.get(acc.id);
                   const blockedMargin = blockedMarginByAccount.get(acc.id);
-                  const realizedPnl = realizedPnlByAccount.get(acc.id);
+                  const unrealizedPnl = unrealizedPnlByAccount.get(acc.id);
                   return (
                     <TableRow
                       key={acc.id}
@@ -724,8 +723,8 @@ export function AccountsPage() {
                       <TableCell className="font-mono text-sm text-muted-foreground">
                         {marginLoading ? "…" : fmtBalance(blockedMargin)}
                       </TableCell>
-                      <TableCell className={`font-mono text-sm font-medium ${pnlColorClass(realizedPnl)}`}>
-                        {pnlLoading ? "…" : fmtPnl(realizedPnl)}
+                      <TableCell className={`font-mono text-sm font-medium ${pnlColorClass(unrealizedPnl)}`}>
+                        {positionsLoading ? "…" : fmtPnl(unrealizedPnl)}
                       </TableCell>
                       <TableCell className="text-sm text-muted-foreground">{fmtUpdatedAt(acc.balanceUpdatedAt)}</TableCell>
                       <TableCell className={`font-mono text-sm ${!checked ? "text-muted-foreground" : ""}`}>
