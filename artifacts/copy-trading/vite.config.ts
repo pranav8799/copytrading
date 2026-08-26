@@ -6,7 +6,7 @@ import path from "path";
 import runtimeErrorOverlay from "@replit/vite-plugin-runtime-error-modal";
 dotenv.config();
 
-const port = Number(process.env.PORT ?? 5173);
+const port = Number(process.env.PORT ?? 5174);
 
 if (Number.isNaN(port) || port <= 0) {
   throw new Error(`Invalid PORT value: "${process.env.PORT}"`);

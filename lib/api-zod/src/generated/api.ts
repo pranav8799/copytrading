@@ -647,3 +647,38 @@ export const UpdateSettingsResponse = zod.object({
 })
 
 
+/**
+ * @summary List all notifications
+ */
+export const ListNotificationsResponseItem = zod.object({
+  "id": zod.number(),
+  "title": zod.string(),
+  "message": zod.string(),
+  "targetType": zod.enum(['ALL', 'ACCOUNT']),
+  "accountId": zod.number().nullish(),
+  "accountName": zod.string().nullish(),
+  "isActive": zod.boolean(),
+  "createdAt": zod.string()
+})
+export const ListNotificationsResponse = zod.array(ListNotificationsResponseItem)
+
+
+/**
+ * @summary Create a notification
+ */
+export const CreateNotificationBody = zod.object({
+  "title": zod.string(),
+  "message": zod.string(),
+  "targetType": zod.enum(['ALL', 'ACCOUNT']),
+  "accountId": zod.number().nullish()
+})
+
+
+/**
+ * @summary Deactivate a notification
+ */
+export const DeactivateNotificationParams = zod.object({
+  "id": zod.coerce.number()
+})
+
+

@@ -23,6 +23,8 @@ import { SelectAccountsPage } from "./pages/select-accounts";
 
 // import { RepunchMonitor } from "@/components/repunch-monitor";
 import { AccountDetailPage } from "./pages/account-detail";
+import { NotificationsPage } from "./pages/notifications";
+import History from "./pages/history";
 // import { AutoLimitPage } from "./pages/auto-limit-page";
 // import { AutoTradePuncherPage } from "./pages/Autotradepuncher";
 
@@ -70,6 +72,8 @@ function Router() {
             <Route path="/settings" component={SettingsPage} />
             <Route path="/select-accounts" component={SelectAccountsPage} />
             <Route path="/accounts/:id" component={AccountDetailPage} />
+            <Route path="/notifications" component={NotificationsPage} />
+            <Route path="/history" component={History} />
             {/* <Route path="/auto-limit" component={AutoTradePuncherPage} /> */}
 
             <Route component={NotFound} />

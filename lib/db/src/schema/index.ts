@@ -6,3 +6,6 @@ export * from "./system_logs";
 export * from "./settings";
 export * from "./otps";
 export * from "./admins";
+export * from "./notifications"; // ← add this line
+export * from "./history"; // ← add this line
+export * from "./setting"; // ← add this line

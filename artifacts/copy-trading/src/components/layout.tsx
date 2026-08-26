@@ -6,9 +6,11 @@ import {
   Briefcase,
   Users,
   Webhook,
-  ScrollText,
   Settings,
   LogOut,
+  Bell,
+  ScrollText,
+  History,
 } from "lucide-react";
 import { PriceTicker } from "@/components/PriceTicker"; // ← adjust path if you placed it elsewhere
 
@@ -23,6 +25,8 @@ export function Layout({ children }: { children: React.ReactNode }) {
     { href: "/webhooks", label: "Webhooks", icon: Webhook },
     { href: "/logs", label: "Logs", icon: ScrollText },
     { href: "/settings", label: "Settings", icon: Settings },
+    { href: "/history", label: "History", icon: History }, // ← add this
+    { href: "/notifications", label: "Notifications", icon: Bell }, // ← add this
   ];
 
   return (

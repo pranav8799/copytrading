@@ -14,7 +14,11 @@ import webhooksRouter from "./webhooks";
 import logsRouter from "./logs";
 import dashboardRouter from "./dashboard";
 import settingsRouter from "./settings";
+import notificationsRouter from "./notifications";
 import healthRouter from "./health";
+// import historyRouter from "./history";
+import historyRouter from "./history"; // ← add this line
+import repunchRouter from "./repunch";
 // import autoLimitRouter from "./auto-limit-route";
 
 const router: IRouter = Router();
@@ -35,6 +39,10 @@ router.use(webhooksRouter);
 router.use(logsRouter);
 router.use(dashboardRouter);
 router.use(settingsRouter);
+router.use(notificationsRouter);
+router.use("/history", historyRouter);
+router.use(repunchRouter);
+
 // router.use(autoLimitRouter);
 
 export default router;

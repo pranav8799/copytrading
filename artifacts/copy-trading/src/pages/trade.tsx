@@ -1,6 +1,6 @@
 import { useState, useCallback, useEffect, useMemo, useRef } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { repunchStore, useWatchedSlots, useSetWatchedSlots, useAutoPunchEnabled } from "@/lib/repunchStore";
+import { repunchStore, useAutoPunchEnabled } from "@/lib/repunchStore";
 import {
   useListAccounts,
   useGetBalances,
@@ -55,6 +55,46 @@ import {
   Play,
 } from "lucide-react";
 import { Link } from "wouter";
+
+/* ── admin repunch-slots API (cross-account, backed by user_settings) ── */
+const authHeaders = () => ({
+  "Content-Type": "application/json",
+  Authorization: `Bearer ${localStorage.getItem("ct_token")}`, // ← swap "token" for the real key name
+});
+
+async function getRepunchSlots(): Promise<WatchedSlot[]> {
+  const res = await fetch(`${import.meta.env.VITE_API_BASE_URL ?? ""}/api/settings/repunch-slots`, {
+    headers: authHeaders(),
+  });
+  if (!res.ok) throw new Error(`Failed to load repunch slots (${res.status})`);
+  return res.json();
+}
+
+async function patchRepunchSlots(updates: { accountId: number; slotId: string; stopped: boolean }[]) {
+  const res = await fetch(`${import.meta.env.VITE_API_BASE_URL ?? ""}/api/settings/repunch-slots`, {
+    method: "PATCH",
+    headers: authHeaders(),
+    body: JSON.stringify({ updates }),
+  });
+  if (!res.ok) throw new Error(`Failed to update slots (${res.status})`);
+}
+
+async function removeRepunchSlots(removals: { accountId: number; slotId: string }[]) {
+  const res = await fetch(`${import.meta.env.VITE_API_BASE_URL ?? ""}/api/settings/repunch-slots/remove`, {
+    method: "POST",
+    headers: authHeaders(),
+    body: JSON.stringify({ removals }),
+  });
+  if (!res.ok) throw new Error(`Failed to remove slots (${res.status})`);
+}
+
+function useAdminRepunchSlots() {
+  return useQuery<WatchedSlot[]>({
+    queryKey: ["adminRepunchSlots"],
+    queryFn: getRepunchSlots,
+    refetchInterval: 5_000,
+  });
+}
 
 /* ── types ─────────────────────────────────────────────────── */
 interface Position {
@@ -145,11 +185,19 @@ interface WatchedSlot {
   quantity: number;
   repunchCount: number;
   status: "pending_fill" | "placing_tp" | "watching" | "repunching";
-  orderId?: string;       // currently-open ENTRY limit (while pending_fill)
-  seenOpen?: boolean;     // has the entry limit been observed resting on the book
-  tpOrderId?: string;     // currently-open EXIT limit (while watching)
-  tpSeenOpen?: boolean;   // has the exit limit been observed resting on the book
-  stopped?: boolean;      // ← user paused auto re-punch for this slot; any repunch trigger must skip it while true
+  orderId?: string;
+  seenOpen?: boolean;
+  tpOrderId?: string;
+  tpSeenOpen?: boolean;
+  stopped?: boolean;
+  batchId?: string;
+  stepSize?: number;
+  stepSizeIncrement?: number;
+  doubleQtyEnabled?: boolean;
+  ladderResetEnabled?: boolean;
+  baseQty?: number;
+  totalLegs?: number;
+  rank?: number;
 }
 /* ── Filter types ── */
 interface PositionFilters {
@@ -1186,9 +1234,8 @@ const setAutoPunchEnabled = repunchStore.setEnabled;
   const [isPunching, setIsPunching] = useState(false);
   const [localAutoPunchConfig, setLocalAutoPunchConfig] = useState<AutoPunchConfig | undefined>();
 
-  /* ── STEP 2: re-punch monitor state ── */
-const watchedSlots = useWatchedSlots();
-const setWatchedSlots = useSetWatchedSlots();
+  /* ── re-punch monitor state (cross-account, from admin API) ── */
+const { data: watchedSlots = [], refetch: refetchWatchedSlots } = useAdminRepunchSlots();
 
   /* ── right panel ── */
   const [rightTab, setRightTab] = useState<"positions" | "orders" | "repunch">("positions");
@@ -1406,11 +1453,8 @@ const setWatchedSlots = useSetWatchedSlots();
   }
 
   if (newSlots.length > 0) {
-    setWatchedSlots((prev) => {
-      const newIds = new Set(newSlots.map((s) => s.id));
-      return [...prev.filter((s) => !newIds.has(s.id)), ...newSlots];
-    });
     setRightTab("repunch");
+    void refetchWatchedSlots();
   }
 
   setIsPunching(false);
@@ -1422,7 +1466,7 @@ const setWatchedSlots = useSetWatchedSlots();
   });
 
   void refetchOrders();
-}, [toast, refetchOrders, setWatchedSlots]);
+}, [toast, refetchOrders, refetchWatchedSlots]);
 
   /* ── execute main order ── */
   const handleExecute = useCallback(async () => {
@@ -1499,23 +1543,37 @@ if (tpPrice || slPrice) {
      selecting candidates to repunch (e.g. add `&& !s.stopped` to the
      candidate filter and to the TP-fill / exit-fill effects).
   ── */
-  const toggleSlotStopped = useCallback((slotId: string) => {
-    setWatchedSlots((prev) => prev.map((s) => (s.id === slotId ? { ...s, stopped: !s.stopped } : s)));
-  }, [setWatchedSlots]);
+  const toggleSlotStopped = useCallback(async (slotId: string) => {
+    const slot = watchedSlots.find((s) => s.id === slotId);
+    if (!slot) return;
+    await patchRepunchSlots([{ accountId: slot.accountId, slotId, stopped: !slot.stopped }]);
+    void refetchWatchedSlots();
+  }, [watchedSlots, refetchWatchedSlots]);
 
-  const setSlotsStopped = useCallback((slotIds: Set<string>, stopped: boolean) => {
-    setWatchedSlots((prev) => prev.map((s) => (slotIds.has(s.id) ? { ...s, stopped } : s)));
-  }, [setWatchedSlots]);
+  const setSlotsStopped = useCallback(async (slotIds: Set<string>, stopped: boolean) => {
+    const updates = watchedSlots
+      .filter((s) => slotIds.has(s.id))
+      .map((s) => ({ accountId: s.accountId, slotId: s.id, stopped }));
+    await patchRepunchSlots(updates);
+    void refetchWatchedSlots();
+  }, [watchedSlots, refetchWatchedSlots]);
 
-  const removeSlot = useCallback((slotId: string) => {
-    setWatchedSlots((prev) => prev.filter((s) => s.id !== slotId));
+  const removeSlot = useCallback(async (slotId: string) => {
+    const slot = watchedSlots.find((s) => s.id === slotId);
+    if (!slot) return;
+    await removeRepunchSlots([{ accountId: slot.accountId, slotId }]);
     setSelectedSlots((prev) => { if (!prev.has(slotId)) return prev; const next = new Set(prev); next.delete(slotId); return next; });
-  }, [setWatchedSlots]);
+    void refetchWatchedSlots();
+  }, [watchedSlots, refetchWatchedSlots]);
 
-  const removeSlots = useCallback((slotIds: Set<string>) => {
-    setWatchedSlots((prev) => prev.filter((s) => !slotIds.has(s.id)));
+  const removeSlots = useCallback(async (slotIds: Set<string>) => {
+    const removals = watchedSlots
+      .filter((s) => slotIds.has(s.id))
+      .map((s) => ({ accountId: s.accountId, slotId: s.id }));
+    await removeRepunchSlots(removals);
     setSelectedSlots(new Set());
-  }, [setWatchedSlots]);
+    void refetchWatchedSlots();
+  }, [watchedSlots, refetchWatchedSlots]);
 
   /* ── exit/cancel ── */
   const doExitPosition = useCallback((pos: Position) => {
@@ -1625,8 +1683,10 @@ const handleAddMargin = useCallback((pos: Position) => {
     else if (confirmState.type === "repunch_stop_selected") setSlotsStopped(selectedSlots, true);
     else if (confirmState.type === "repunch_remove_one") removeSlot(confirmState.slotId);
     else if (confirmState.type === "repunch_remove_selected") removeSlots(selectedSlots);
-    else if (confirmState.type === "repunch_clear_all") setWatchedSlots([]);
-  }, [confirmState, doExitPosition, doExitSelected, doExitAll, doCancelAll, doCancelSelected, handleCancelOrder, setSlotsStopped, removeSlot, removeSlots, selectedSlots, setWatchedSlots]);
+    else if (confirmState.type === "repunch_clear_all") {
+      void removeRepunchSlots(watchedSlots.map((s) => ({ accountId: s.accountId, slotId: s.id }))).then(() => refetchWatchedSlots());
+    }
+}, [confirmState, doExitPosition, doExitSelected, doExitAll, doCancelAll, doCancelSelected, handleCancelOrder, setSlotsStopped, removeSlot, removeSlots, selectedSlots, watchedSlots, refetchWatchedSlots]);
 
   const handleModalSave = (additions: SelectedAccount[]) => {
     if (!additions.length) return;
@@ -2742,13 +2802,10 @@ const handleAddMargin = useCallback((pos: Position) => {
           setAutoPunchEnabled(true);
         }}
         savedConfig={autoPunchConfig}
-        onSlotsCreated={(slots) => {
-          setWatchedSlots((prev) => {
-            const newIds = new Set(slots.map((s) => s.id));
-            return [...prev.filter((s) => !newIds.has(s.id)), ...slots];
-          });
+        onSlotsCreated={() => {
           setRightTab("repunch");
           void refetchOrders();
+          void refetchWatchedSlots();
         }}
       />
 

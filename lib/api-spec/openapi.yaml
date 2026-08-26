@@ -24,6 +24,7 @@ tags:
   - name: logs
   - name: dashboard
   - name: settings
+  - name: notifications
 
 paths:
   /healthz:
@@ -733,6 +734,60 @@ paths:
               schema:
                 $ref: "#/components/schemas/Settings"
 
+
+  /notifications:
+    get:
+      operationId: listNotifications
+      tags: [notifications]
+      summary: List all notifications
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: List of notifications
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Notification"
+    post:
+      operationId: createNotification
+      tags: [notifications]
+      summary: Create a notification
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/NotificationInput"
+      responses:
+        "201":
+          description: Created notification
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Notification"
+
+  /notifications/{id}/deactivate:
+    patch:
+      operationId: deactivateNotification
+      tags: [notifications]
+      summary: Deactivate a notification
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "204":
+          description: Deactivated                
+
 components:
   securitySchemes:
     bearerAuth:
@@ -1384,3 +1439,40 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/SelectedAccount"
+
+    Notification:
+      type: object
+      required: [id, title, message, targetType, isActive, createdAt]
+      properties:
+        id:
+          type: integer
+        title:
+          type: string
+        message:
+          type: string
+        targetType:
+          type: string
+          enum: ["ALL", "ACCOUNT"]
+        accountId:
+          type: ["integer", "null"]
+        accountName:
+          type: ["string", "null"]
+        isActive:
+          type: boolean
+        createdAt:
+          type: string
+
+    NotificationInput:
+      type: object
+      required: [title, message, targetType]
+      properties:
+        title:
+          type: string
+        message:
+          type: string
+        targetType:
+          type: string
+          enum: ["ALL", "ACCOUNT"]
+        accountId:
+          type: ["integer", "null"]
+    

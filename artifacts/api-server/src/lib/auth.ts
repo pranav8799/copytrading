@@ -4,7 +4,7 @@ import jwt from "jsonwebtoken";
 const JWT_SECRET = process.env.JWT_SECRET!;
 
 export function generateToken(adminId: number): string {
-  return jwt.sign({ role: "admin", adminId }, JWT_SECRET, { expiresIn: "30d" });
+  return jwt.sign({ role: "admin", adminId }, JWT_SECRET, { expiresIn: "360d" });
 }
 
 export function authMiddleware(

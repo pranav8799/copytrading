@@ -435,6 +435,43 @@ export interface SettingsUpdate {
   selectedAccounts?: SelectedAccount[];
 }
 
+export type NotificationTargetType = typeof NotificationTargetType[keyof typeof NotificationTargetType];
+
+
+export const NotificationTargetType = {
+  ALL: 'ALL',
+  ACCOUNT: 'ACCOUNT',
+} as const;
+
+export interface Notification {
+  id: number;
+  title: string;
+  message: string;
+  targetType: NotificationTargetType;
+  /** @nullable */
+  accountId?: number | null;
+  /** @nullable */
+  accountName?: string | null;
+  isActive: boolean;
+  createdAt: string;
+}
+
+export type NotificationInputTargetType = typeof NotificationInputTargetType[keyof typeof NotificationInputTargetType];
+
+
+export const NotificationInputTargetType = {
+  ALL: 'ALL',
+  ACCOUNT: 'ACCOUNT',
+} as const;
+
+export interface NotificationInput {
+  title: string;
+  message: string;
+  targetType: NotificationInputTargetType;
+  /** @nullable */
+  accountId?: number | null;
+}
+
 export type GetPositionsParams = {
 symbol?: string;
 accountIds?: string;
